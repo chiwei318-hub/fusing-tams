@@ -1,0 +1,8 @@
+﻿[phases.setup]
+nixPkgs = ["nodejs_20", "nodePackages.pnpm"]
+
+[phases.build]
+cmds = ["pnpm install", "pnpm run build:api"]
+
+[start]
+cmd = "node artifacts/api-server/dist/index.mjs"
