@@ -1,0 +1,37 @@
+{
+  "name": "workspace",
+  "version": "0.0.0",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20 <23"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "preinstall": "node scripts/preinstall.cjs",
+    "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "build:api": "pnpm run typecheck:libs && pnpm --filter @workspace/api-server run build",
+    "start": "node artifacts/api-server/dist/index.mjs",
+    "heroku-postbuild": "pnpm run build:api",
+    "typecheck:libs": "tsc --build",
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+  },
+  "private": true,
+  "pnpm": {
+    "overrides": {
+      "picomatch@2": "2.3.2",
+      "picomatch@4": "4.0.4",
+      "path-to-regexp": "8.4.0",
+      "lodash": "4.18.0"
+    }
+  },
+  "devDependencies": {
+    "prettier": "^3.8.1",
+    "tsx": "catalog:",
+    "typescript": "~5.9.2"
+  },
+  "dependencies": {
+    "@types/pdfkit": "^0.17.5",
+    "pdfkit": "^0.18.0",
+    "pg": "^8.20.0"
+  }
+}

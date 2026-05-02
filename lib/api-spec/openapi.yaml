@@ -1,0 +1,545 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: 富詠運輸派車管理系統 API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: orders
+    description: Order management
+  - name: drivers
+    description: Driver management
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /orders:
+    get:
+      operationId: listOrders
+      tags: [orders]
+      summary: List all orders
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: feeStatus
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: driverId
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+    post:
+      operationId: createOrder
+      tags: [orders]
+      summary: Create a new order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderInput"
+      responses:
+        "201":
+          description: Order created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /orders/track:
+    get:
+      operationId: trackOrder
+      tags: [orders]
+      summary: Track order by phone number and optional order ID
+      parameters:
+        - name: phone
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: orderId
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of matching orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      tags: [orders]
+      summary: Get order by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Order detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateOrder
+      tags: [orders]
+      summary: Update order
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrderInput"
+      responses:
+        "200":
+          description: Order updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /orders/{id}/driver-action:
+    post:
+      operationId: driverAction
+      tags: [orders]
+      summary: Driver performs an action on an order (accept, checkin, complete)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DriverActionInput"
+      responses:
+        "200":
+          description: Action performed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /orders/{id}/payment:
+    post:
+      operationId: confirmPayment
+      tags: [orders]
+      summary: Customer confirms payment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentConfirmInput"
+      responses:
+        "200":
+          description: Payment confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /drivers:
+    get:
+      operationId: listDrivers
+      tags: [drivers]
+      summary: List all drivers
+      responses:
+        "200":
+          description: List of drivers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Driver"
+    post:
+      operationId: createDriver
+      tags: [drivers]
+      summary: Create a new driver
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDriverInput"
+      responses:
+        "201":
+          description: Driver created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Driver"
+
+  /drivers/{id}:
+    patch:
+      operationId: updateDriver
+      tags: [drivers]
+      summary: Update driver
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDriverInput"
+      responses:
+        "200":
+          description: Driver updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Driver"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteDriver
+      tags: [drivers]
+      summary: Delete a driver
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Driver deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    OrderStatus:
+      type: string
+      enum: [pending, assigned, in_transit, delivered, cancelled]
+
+    FeeStatus:
+      type: string
+      enum: [unpaid, paid, invoiced]
+
+    DriverStatus:
+      type: string
+      enum: [available, busy, offline]
+
+    DriverActionType:
+      type: string
+      enum: [accept, reject, checkin, complete]
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: integer
+        customerName:
+          type: string
+        customerPhone:
+          type: string
+        pickupAddress:
+          type: string
+        deliveryAddress:
+          type: string
+        cargoDescription:
+          type: string
+        cargoWeight:
+          type: number
+          nullable: true
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        driverId:
+          type: integer
+          nullable: true
+        driver:
+          $ref: "#/components/schemas/Driver"
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        basePrice:
+          type: number
+          nullable: true
+        extraFee:
+          type: number
+          nullable: true
+        totalFee:
+          type: number
+          nullable: true
+        feeStatus:
+          $ref: "#/components/schemas/FeeStatus"
+        driverAcceptedAt:
+          type: string
+          format: date-time
+          nullable: true
+        checkInAt:
+          type: string
+          format: date-time
+          nullable: true
+        signaturePhotoUrl:
+          type: string
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        paymentNote:
+          type: string
+          nullable: true
+        paymentConfirmedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - customerName
+        - customerPhone
+        - pickupAddress
+        - deliveryAddress
+        - cargoDescription
+        - status
+        - feeStatus
+        - createdAt
+        - updatedAt
+
+    CreateOrderInput:
+      type: object
+      properties:
+        customerName:
+          type: string
+        customerPhone:
+          type: string
+        pickupAddress:
+          type: string
+        deliveryAddress:
+          type: string
+        cargoDescription:
+          type: string
+        cargoWeight:
+          type: number
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+      required:
+        - customerName
+        - customerPhone
+        - pickupAddress
+        - deliveryAddress
+        - cargoDescription
+
+    UpdateOrderInput:
+      type: object
+      properties:
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        driverId:
+          type: integer
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        basePrice:
+          type: number
+          nullable: true
+        extraFee:
+          type: number
+          nullable: true
+        totalFee:
+          type: number
+          nullable: true
+        feeStatus:
+          $ref: "#/components/schemas/FeeStatus"
+
+    DriverActionInput:
+      type: object
+      properties:
+        action:
+          $ref: "#/components/schemas/DriverActionType"
+        signaturePhotoUrl:
+          type: string
+          nullable: true
+        completionNote:
+          type: string
+          nullable: true
+      required: [action]
+
+    PaymentConfirmInput:
+      type: object
+      properties:
+        paymentNote:
+          type: string
+          nullable: true
+      required: []
+
+    Driver:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        phone:
+          type: string
+        vehicleType:
+          type: string
+        licensePlate:
+          type: string
+        status:
+          $ref: "#/components/schemas/DriverStatus"
+        lineUserId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - phone
+        - vehicleType
+        - licensePlate
+        - status
+        - createdAt
+
+    CreateDriverInput:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+        vehicleType:
+          type: string
+        licensePlate:
+          type: string
+        lineUserId:
+          type: string
+          nullable: true
+      required: [name, phone, vehicleType, licensePlate]
+
+    UpdateDriverInput:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+        vehicleType:
+          type: string
+        licensePlate:
+          type: string
+        status:
+          $ref: "#/components/schemas/DriverStatus"
+        lineUserId:
+          type: string
+          nullable: true

@@ -1,0 +1,264 @@
+import { Router, type IRouter } from "express";
+import healthRouter from "./health";
+import ordersRouter from "./orders";
+import driversRouter from "./drivers";
+import lineRouter from "./line";
+import customersRouter from "./customers";
+import vehicleTypesRouter from "./vehicleTypes";
+import licensesRouter from "./licenses";
+import enterpriseRouter from "./enterprise";
+import outsourcingRouter from "./outsourcing";
+import { pricingRouter } from "./pricing";
+import paymentsRouter from "./payments";
+import permissionsRouter from "./permissions";
+import aiChatRouter from "./aiChat";
+import authRouter from "./auth";
+import googleAuthRouter from "./googleAuth";
+import { routePricesRouter } from "./routePrices";
+import { vehicleCostsRouter } from "./vehicleCosts";
+import { smartOrderRouter } from "./smartOrder";
+import { driverOnboardingRouter } from "./driverOnboarding";
+import { customerManagementRouter } from "./customerManagement";
+import { ratingsRouter } from "./ratings";
+import { customerNotificationsRouter } from "./customerNotifications";
+import { systemConfigRouter } from "./systemConfig";
+import { invoicesRouter } from "./invoices";
+import { biddingRouter } from "./bidding";
+import { driverIncomeRouter } from "./driverIncome";
+import { fleetRegistrationRouter } from "./fleetRegistration";
+import { paymentMethodsRouter } from "./paymentMethods";
+import { performanceRouter } from "./performance";
+import { quickOrderRouter } from "./quickOrder";
+import { dispatchAlertsRouter } from "./dispatchAlerts";
+import { kpiDashboardRouter } from "./kpiDashboard";
+import { approvalsRouter } from "./approvals";
+import { costEventsRouter } from "./costEvents";
+import { auditLogRouter } from "./auditLog";
+import { costAnalysisRouter } from "./costAnalysis";
+import { settlementExportRouter } from "./settlementExport";
+import { orderStatusFlowRouter } from "./orderStatusFlow";
+import { dispatchSuggestRouter } from "./dispatchSuggest";
+import { zonesRouter } from "./zones";
+import { dailyOpsRouter } from "./dailyOps";
+import { orderImportRouter } from "./orderImport";
+import { routeImportRouter } from "./routeImport";
+import { formImportRouter } from "./formImport";
+import { autoRoutingRouter } from "./autoRouting";
+import { zonePermissionsRouter } from "../middleware/zoneScope";
+import { presenceRouter } from "./presence";
+import { auditMiddleware } from "../middleware/audit";
+import { quotesRouter } from "./quotes";
+import { contractQuotesRouter } from "./contractQuotes";
+import { gloryModulesRouter } from "./gloryModules";
+import { loanManagementRouter } from "./loanManagement";
+import { franchiseesRouter } from "./franchisees";
+import { cashFlowRouter } from "./cashFlow";
+import { apiKeysRouter } from "./apiKeys";
+import { webhooksRouter } from "./webhooks";
+import { openApiRouter } from "./openApi";
+import { arLedgerRouter } from "./arLedger";
+import { monthlyBillingRouter } from "./monthlyBilling";
+import { ecpayWebhookRouter } from "./ecpayWebhook";
+import { reportsRouter } from "./reports";
+import { sheetSyncRouter } from "./sheetSync";
+import { penaltiesRouter } from "./penalties";
+import { shopeeRatesRouter } from "./shopeeRates";
+import { driverEarningsRouter } from "./driverEarnings";
+import { pnlRouter } from "./pnl";
+import { monthlyPnlRouter } from "./monthlyPnl";
+import { fusingaoRouter } from "./fusingao";
+import { penaltySyncRouter } from "./penaltySync";
+import { rateSyncRouter } from "./rateSync";
+import { shopeeDriversRouter } from "./shopeeDrivers";
+import { shopeeSchedulesRouter } from "./shopeeSchedules";
+import { dispatchOrdersRouter } from "./dispatchOrders";
+import { shopeeBillingRouter } from "./shopeeBillingImport";
+import { fusingaoScheduleRouter } from "./fusingaoScheduleImport";
+import { fusingaoBillingDetailRouter } from "./fusingaoBillingDetailImport";
+import { fusingaoSheetSyncRouter } from "./fusingaoSheetSync";
+import { fusingaoAutoDispatchRouter } from "./fusingaoAutoDispatch";
+import { platformFleetsRouter } from "./platformFleets";
+import { fleetOwnerRouter } from "./fleetOwner";
+import { fleetDriverRouter } from "./fleetDriver";
+import { requireFleetOwner, requireFleetDriver } from "../middleware/fleetAuth";
+import { commissionManagementRouter } from "./commissionManagement";
+import { receiptsRouter } from "./receipts";
+import { commissionTiersRouter } from "./commissionTiers";
+import { strategicKpiRouter } from "./strategicKpi";
+import { pricingEngineRoute } from "./pricingEngineRoute";
+import { mapsRouter } from "./mapsRoute";
+import { orderSettlementsRouter } from "./orderSettlements";
+import { jobsRouter } from "./jobs";
+import { webhookOrdersRouter } from "./webhookOrders";
+import { franchiseSettlementsRouter } from "./franchiseSettlements";
+import { vehicleProfitRouter } from "./vehicleProfit";
+import { laborPensionRouter } from "./laborPension";
+import { payrollCostRouter } from "./payrollCost";
+import { cargoPackagingRouter } from "./cargoPackaging";
+import { platformRequirementsRouter } from "./platformRequirements";
+import { sheetsExportRouter } from "./sheetsExport";
+import { firebaseSyncRouter } from "./firebaseSync";
+import { freightQuoteRouter } from "./freightQuote";
+import { vehicleSurchargeRouter } from "./vehicleSurcharge";
+import { driverPositionsRouter } from "./driverPositions";
+import { dispatchSuggestEnhancedRouter } from "./dispatchSuggestEnhanced";
+import { taxPayrollRouter } from "./taxPayroll";
+import { createFleetSystemRouter } from "./fleetSystem";
+import { createAffiliatedOwnerRouter } from "./affiliatedOwner";
+import { fourLayerSettlementRouter } from "./fourLayerSettlement";
+import { ownerCashSettlementRouter } from "./ownerCashSettlement";
+import { fuelCardsRouter } from "./fuelCards";
+import { notificationsRouter } from "./notifications";
+import invitationsRouter from "./invitations";
+import oauthAccountsRouter from "./oauthAccounts";
+import locationIntelligenceRouter from "./locationIntelligence";
+import { shopeeScheduleSyncRouter } from "./shopeeScheduleSync";
+import { partnersRouter } from "./partners";
+import { vehicleMatrixRouter } from "./vehicleMatrix";
+import { smartQuoteRouter } from "./smartQuote";
+import { financialsRouter } from "./financials";
+import { quotePortalRouter } from "./quotePortal";
+import { arApRouter } from "./arApLedger";
+
+const router: IRouter = Router();
+
+// --- 強制通電：解決 FlutterFlow 抓不到資料的問題 ---
+router.get('/jobs/get-task', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.status(200).send({
+    "customer_name": "蝦皮電商配送",
+    "address": "新北市蘆洲區中山一路269號",
+    "temp_type": "常溫",
+    "note": "路線：WD-01-211-2 | 碼頭：A05",
+    "status": "pending"
+  });
+});
+// ------------------------------------------------
+
+router.use(auditMiddleware);
+
+router.use(healthRouter);
+router.use(orderImportRouter);
+router.use(routeImportRouter);
+router.use(formImportRouter);
+router.use(ordersRouter);
+router.use(driverPositionsRouter);         // GPS 位置（必須在 driversRouter 之前）
+router.use(driversRouter);
+router.use(lineRouter);
+router.use(customersRouter);
+router.use(vehicleTypesRouter);
+router.use(licensesRouter);
+router.use(enterpriseRouter);
+router.use(outsourcingRouter);
+router.use("/orders", pricingRouter);
+router.use(paymentsRouter);
+router.use(permissionsRouter);
+router.use(aiChatRouter);
+router.use(authRouter);
+router.use(googleAuthRouter);
+router.use("/admin/invitations", invitationsRouter);
+router.use("/auth/invite", invitationsRouter);
+router.use("/auth/oauth", oauthAccountsRouter);
+router.use(routePricesRouter);
+router.use(vehicleCostsRouter);
+router.use(smartOrderRouter);
+router.use(driverOnboardingRouter);
+router.use(customerManagementRouter);
+router.use("/ratings", ratingsRouter);
+router.use("/customer-notifications", customerNotificationsRouter);
+router.use("/system-config", systemConfigRouter);
+router.use(invoicesRouter);
+router.use(biddingRouter);
+router.use(driverIncomeRouter);
+router.use(fleetRegistrationRouter);
+router.use(paymentMethodsRouter);
+router.use(performanceRouter);
+router.use("/quick-order", quickOrderRouter);
+router.use(dispatchAlertsRouter);
+router.use(kpiDashboardRouter);
+router.use(approvalsRouter);
+router.use(costEventsRouter);
+router.use(auditLogRouter);
+router.use(costAnalysisRouter);
+router.use(settlementExportRouter);
+router.use(orderStatusFlowRouter);
+router.use(dispatchSuggestRouter);
+router.use(zonesRouter);
+router.use(dailyOpsRouter);
+router.use(autoRoutingRouter);
+router.use(zonePermissionsRouter);
+router.use(presenceRouter);
+router.use(quotesRouter);
+router.use(contractQuotesRouter);
+router.use(gloryModulesRouter);
+router.use(loanManagementRouter);
+router.use(franchiseesRouter);
+router.use(cashFlowRouter);
+router.use(apiKeysRouter);
+router.use(webhooksRouter);
+router.use(openApiRouter);
+router.use(arLedgerRouter);
+router.use(monthlyBillingRouter);
+router.use(ecpayWebhookRouter);
+router.use(reportsRouter);
+router.use(sheetSyncRouter);
+router.use("/penalties", penaltiesRouter);
+router.use("/shopee-rates", shopeeRatesRouter);
+router.use("/driver-earnings", driverEarningsRouter);
+router.use("/pnl", pnlRouter);
+router.use("/monthly-pnl", monthlyPnlRouter);
+router.use("/fusingao", fusingaoRouter);
+router.use(penaltySyncRouter);
+router.use(rateSyncRouter);
+router.use(shopeeDriversRouter);
+router.use(shopeeSchedulesRouter);
+router.use("/dispatch-orders", dispatchOrdersRouter);
+router.use(shopeeBillingRouter);
+router.use("/fusingao", fusingaoScheduleRouter);
+router.use("/fusingao", fusingaoBillingDetailRouter);
+router.use("/fusingao", fusingaoSheetSyncRouter);
+router.use("/fusingao", fusingaoAutoDispatchRouter);
+
+// ── 富詠加盟車行管理平台 ──────────────────────────────────────────────────────
+router.use(platformFleetsRouter);                        // 平台管理端：/platform/fleets
+router.use("/fleet", requireFleetOwner, fleetOwnerRouter);   // 車行老闆（/fleet/* 才套 auth）
+router.use("/driver", requireFleetDriver, fleetDriverRouter); // 司機手機端（/driver/* 才套 auth）
+router.use(commissionManagementRouter);                       // 抽成管理
+router.use(receiptsRouter);                                   // OCR 簽單對帳
+router.use("/commission-tiers", commissionTiersRouter);       // 階梯抽成引擎
+router.use("/kpi/strategic", strategicKpiRouter);             // 戰略 KPI 追蹤
+router.use("/pe", pricingEngineRoute);                        // 透明公式報價引擎
+router.use(mapsRouter);                                        // Google Maps 距離 API
+router.use("/order-settlements", orderSettlementsRouter);      // 訂單結算 & 利潤拆分
+router.use(jobsRouter);                                        // 司機任務 API
+router.use(webhookOrdersRouter);                               // 外部訂單接收 Webhook
+router.use("/franchise-settlements", franchiseSettlementsRouter); // 加盟主清算 & ATOMS 推送
+router.use(vehicleProfitRouter);                                   // 車輛盈虧分析
+router.use(laborPensionRouter);                                    // 勞退提撥管理
+router.use(payrollCostRouter);                                     // 薪資成本結算
+router.use(cargoPackagingRouter);                                  // 貨品包裝參考表
+router.use(platformRequirementsRouter);                            // 物流媒合平台需求確認
+router.use(sheetsExportRouter);                                    // Google Sheets 財務備份匯出
+router.use(firebaseSyncRouter);                                    // Firebase Firestore 雲端金庫同步
+router.use(freightQuoteRouter);                                    // 台灣貨運報價計算引擎
+router.use(vehicleSurchargeRouter);                                // 車型附加費計算引擎
+router.use(dispatchSuggestEnhancedRouter);                         // AI 智慧派車建議
+router.use("/tax", taxPayrollRouter);                              // 稅務合規薪資引擎
+router.use("/fleet-system", createFleetSystemRouter());             // 車隊分類 + 損益系統
+router.use("/affiliated-owners", createAffiliatedOwnerRouter());    // 靠行車主管理
+router.use(fourLayerSettlementRouter);                              // 四層財務結算系統
+router.use(fuelCardsRouter);                                        // 加油卡代墊記錄系統
+router.use(ownerCashSettlementRouter);                              // 車主現金結算系統
+router.use("/notifications", notificationsRouter);                  // 雙推播通知系統
+router.use("/locations", locationIntelligenceRouter);               // 地點智慧系統
+router.use(shopeeScheduleSyncRouter);                               // 蝦皮地址同步（06:00 排程）
+
+// ── 富詠全智慧物流清算平台 六大模組 ─────────────────────────────────────────
+router.use(partnersRouter);          // 模組1：廠商檔案管理
+router.use(vehicleMatrixRouter);     // 模組2：車型定義矩陣
+router.use(smartQuoteRouter);        // 模組3：智慧報價引擎
+router.use(financialsRouter);        // 模組4+6：財務清算 + 月結導出
+router.use(quotePortalRouter);       // 模組5：廠商查價入口
+router.use(arApRouter);              // AR/AP 清算輔助
+
+export default router;

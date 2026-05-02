@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/calculator/"
+title = "麒巍專屬：物流營運決策精算器"
+version = "1.0.0"
+id = "artifacts/calculator"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/calculator/" ]
+localPort = 5000
+
+[services.development]
+run = "streamlit run /home/runner/workspace/artifacts/calculator/app.py"
+
+[services.production]
+
+[services.production.build]
+args = ["pip", "install", "-r", "artifacts/calculator/requirements.txt"]
+
+[services.production.run]
+args = ["streamlit", "run", "artifacts/calculator/app.py"]
+
+[services.production.run.env]
+PORT = "5000"
+
+[services.env]
+PORT = "5000"

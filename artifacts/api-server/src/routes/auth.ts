@@ -1,0 +1,691 @@
+import { Router, type IRouter } from "express";
+import { createHash, randomBytes } from "crypto";
+import { db, customersTable, driversTable, adminUsers, adminRoles, otpsTable, lineAccountsTable } from "@workspace/db";
+import { eq, and, gt, sql } from "drizzle-orm";
+import { signJwt, verifyJwt, extractBearerToken } from "../lib/jwt.js";
+
+const router: IRouter = Router();
+
+const OTP_TTL_MS = 5 * 60 * 1000;
+const OTP_RATE_MS = 60 * 1000;
+
+function generateOtp(): string {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function normalizePhone(raw: string): string {
+  return raw.replace(/[\s\-()\+]/g, "");
+}
+
+function isValidTaiwanPhone(phone: string): boolean {
+  return /^09\d{8}$/.test(phone);
+}
+
+function hashPassword(password: string, salt?: string): string {
+  const s = salt ?? randomBytes(16).toString("hex");
+  const hash = createHash("sha256").update(s + password).digest("hex");
+  return `${s}:${hash}`;
+}
+
+function checkPassword(plain: string, stored: string): boolean {
+  const [salt] = stored.split(":");
+  return hashPassword(plain, salt) === stored;
+}
+
+async function sendSmsOtp(phone: string, otp: string): Promise<void> {
+  const user = process.env.EVERY8D_USER;
+  const pass = process.env.EVERY8D_PASS;
+  if (!user || !pass) {
+    console.log(`[OTP DEV] phone=${phone}  otp=${otp}`);
+    return;
+  }
+  const msg = `【富詠運輸】您的驗證碼為 ${otp}，5分鐘內有效，請勿外洩。`;
+  const params = new URLSearchParams({ UID: user, PWD: pass, SB: "富詠運輸", MSG: msg, DEST: phone, ST: "" });
+  const resp = await fetch("https://api.every8d.com/API21/HTTP/sendSMS.ashx", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+  });
+  if (!resp.ok) throw new Error(`SMS send failed: HTTP ${resp.status}`);
+  const text = await resp.text();
+  if (text.startsWith("-")) throw new Error(`SMS API error: ${text}`);
+}
+
+// ── POST /auth/send-otp ──────────────────────────────────────────────────────
+router.post("/auth/send-otp", async (req, res) => {
+  try {
+    const rawPhone = String(req.body?.phone ?? "").trim();
+    const phone = normalizePhone(rawPhone);
+
+    if (!isValidTaiwanPhone(phone)) {
+      return res.status(400).json({ error: "請輸入有效的台灣手機號碼（09開頭，共10位）" });
+    }
+
+    let customers = await db.select().from(customersTable).where(eq(customersTable.phone, phone));
+
+    // Auto-create customer if phone not found (walk-in / first-time login)
+    if (!customers.length) {
+      const inserted = await db.insert(customersTable).values({
+        name: phone,
+        phone,
+        isActive: true,
+      }).returning();
+      customers = inserted;
+    }
+
+    if (!customers[0].isActive) {
+      return res.status(403).json({ error: "帳號審核中，尚未開通。請等待管理員啟用，我們將電話通知您。" });
+    }
+
+    const now = new Date();
+    const existing = await db
+      .select()
+      .from(otpsTable)
+      .where(and(eq(otpsTable.phone, phone), gt(otpsTable.expiresAt, now)));
+
+    if (existing.length) {
+      const sentAt = existing[0].createdAt.getTime();
+      const waitMs = OTP_RATE_MS - (Date.now() - sentAt);
+      if (waitMs > 0) {
+        return res.status(429).json({ error: `請等待 ${Math.ceil(waitMs / 1000)} 秒後再重新發送` });
+      }
+    }
+
+    await db.delete(otpsTable).where(eq(otpsTable.phone, phone));
+
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+    await db.insert(otpsTable).values({ phone, otp, expiresAt });
+
+    await sendSmsOtp(phone, otp);
+
+    const isDev = process.env.NODE_ENV !== "production";
+    return res.json({ ok: true, ...(isDev ? { devOtp: otp } : {}) });
+  } catch (err) {
+    req.log.error({ err }, "Failed to send OTP");
+    res.status(500).json({ error: "簡訊發送失敗，請稍後再試" });
+  }
+});
+
+// ── POST /auth/login/customer ────────────────────────────────────────────────
+router.post("/auth/login/customer", async (req, res) => {
+  try {
+    const rawPhone = String(req.body?.phone ?? "").trim();
+    const phone = normalizePhone(rawPhone);
+    const otp = String(req.body?.otp ?? "").trim();
+
+    if (!isValidTaiwanPhone(phone) || !otp) {
+      return res.status(400).json({ error: "請提供手機號碼與驗證碼" });
+    }
+
+    const now = new Date();
+    const [entry] = await db
+      .select()
+      .from(otpsTable)
+      .where(and(eq(otpsTable.phone, phone), gt(otpsTable.expiresAt, now)));
+
+    if (!entry) {
+      return res.status(400).json({ error: "驗證碼不存在或已過期，請重新發送" });
+    }
+    if (entry.otp !== otp) {
+      return res.status(400).json({ error: "驗證碼不正確，請重新輸入" });
+    }
+
+    await db.delete(otpsTable).where(eq(otpsTable.phone, phone));
+
+    const [customer] = await db.select().from(customersTable).where(eq(customersTable.phone, phone));
+    if (!customer) return res.status(404).json({ error: "找不到此客戶帳號" });
+    if (!customer.isActive) return res.status(403).json({ error: "帳號審核中，尚未開通。請等待管理員啟用，我們將電話通知您。" });
+
+    const token = signJwt({ role: "customer", id: customer.id, name: customer.name, phone: customer.phone });
+    return res.json({ token, user: { id: customer.id, role: "customer", name: customer.name, phone: customer.phone } });
+  } catch (err) {
+    req.log.error({ err }, "Customer OTP login failed");
+    res.status(500).json({ error: "登入失敗，請稍後再試" });
+  }
+});
+
+// ── POST /auth/login/driver ──────────────────────────────────────────────────
+router.post("/auth/login/driver", async (req, res) => {
+  try {
+    const { username, password } = req.body as { username: string; password: string };
+    if (!username || !password) {
+      return res.status(400).json({ error: "請提供帳號與密碼" });
+    }
+    const normalizedUser = username.trim().toLowerCase();
+    const [driver] = await db.select().from(driversTable)
+      .where(sql`lower(${driversTable.username}) = ${normalizedUser}`);
+    if (!driver || !driver.password) {
+      return res.status(401).json({ error: "帳號或密碼不正確" });
+    }
+
+    const isHashed = driver.password.includes(":");
+    const valid = isHashed
+      ? checkPassword(password, driver.password)
+      : driver.password === password;
+
+    if (!valid) return res.status(401).json({ error: "帳號或密碼不正確" });
+
+    const token = signJwt({ role: "driver", id: driver.id, name: driver.name, phone: driver.phone });
+    return res.json({ token, user: { id: driver.id, role: "driver", name: driver.name, phone: driver.phone } });
+  } catch (err) {
+    req.log.error({ err }, "Driver login failed");
+    res.status(500).json({ error: "登入失敗，請稍後再試" });
+  }
+});
+
+// ── POST /login/driver — 手機號碼登入別名（FlutterFlow / 外部 App 用）────────
+router.post("/login/driver", async (req, res) => {
+  try {
+    const { phone, password } = req.body as { phone: string; password: string };
+    if (!phone || !password) {
+      return res.status(400).json({ error: "請提供手機號碼與密碼" });
+    }
+    const normalized = normalizePhone(phone.trim());
+    const [driver] = await db.select().from(driversTable)
+      .where(sql`replace(replace(${driversTable.phone},' ',''),'-','') = ${normalized}`);
+
+    if (!driver) return res.status(401).json({ error: "帳號或密碼不正確" });
+
+    // 相容明文與 salt:hash 兩種格式
+    const valid = driver.password
+      ? (driver.password.includes(":")
+          ? checkPassword(password, driver.password)
+          : driver.password === password)
+      : false;
+
+    if (!valid) return res.status(401).json({ error: "帳號或密碼不正確" });
+
+    const token = signJwt({ role: "driver", id: driver.id, name: driver.name, phone: driver.phone });
+    return res.json({
+      token,
+      user: { id: driver.id, role: "driver", name: driver.name, phone: driver.phone },
+    });
+  } catch (err) {
+    req.log?.error?.({ err }, "driver phone-login failed");
+    res.status(500).json({ error: "登入失敗，請稍後再試" });
+  }
+});
+
+// ── POST /auth/login/fleet ── (Fusingao sub-contractor fleet + sub-accounts) ─
+router.post("/auth/login/fleet", async (req, res) => {
+  try {
+    const { username, password } = req.body as { username: string; password: string };
+    if (!username || !password) return res.status(400).json({ error: "請提供帳號與密碼" });
+
+    // 1) Try fleet admin account first
+    const [fleet] = await db.execute(sql`
+      SELECT id, fleet_name, username, password, is_active
+      FROM fusingao_fleets WHERE lower(username)=${username.toLowerCase().trim()}
+    `).then(r => r.rows as any[]);
+
+    if (fleet) {
+      if (!fleet.is_active) return res.status(403).json({ error: "帳號已停用" });
+      const ok = fleet.password.includes(":")
+        ? checkPassword(password, fleet.password)
+        : fleet.password === password;
+      if (!ok) return res.status(401).json({ error: "密碼錯誤" });
+      const token = signJwt({ role: "fusingao_fleet" as any, id: fleet.id, name: fleet.fleet_name, username: fleet.username, fleetId: fleet.id } as any);
+      return res.json({ token, user: { id: fleet.id, role: "fusingao_fleet", name: fleet.fleet_name, username: fleet.username, fleetId: fleet.id } });
+    }
+
+    // 2) Try fleet sub-account (driver account)
+    const [sub] = await db.execute(sql`
+      SELECT sa.*, f.fleet_name
+      FROM fleet_sub_accounts sa
+      JOIN fusingao_fleets f ON f.id = sa.fleet_id
+      WHERE lower(sa.username) = ${username.toLowerCase().trim()}
+    `).then(r => r.rows as any[]);
+
+    if (!sub) return res.status(401).json({ error: "帳號不存在" });
+    if (!sub.is_active) return res.status(403).json({ error: "帳號已停用" });
+    const subOk = checkPassword(password, sub.password_hash);
+    if (!subOk) return res.status(401).json({ error: "密碼錯誤" });
+
+    const token = signJwt({
+      role: "fleet_sub" as any,
+      id: sub.id,
+      name: sub.display_name,
+      username: sub.username,
+      fleetId: sub.fleet_id,
+      subAccountId: sub.id,
+      shopeeDriverId: sub.shopee_driver_id,
+      subRole: sub.role,
+    } as any);
+    return res.json({
+      token,
+      user: {
+        id: sub.id,
+        role: "fleet_sub",
+        name: sub.display_name,
+        username: sub.username,
+        fleetId: sub.fleet_id,
+        subAccountId: sub.id,
+        shopeeDriverId: sub.shopee_driver_id,
+        subRole: sub.role,
+        fleetName: sub.fleet_name,
+      },
+    });
+  } catch (err) {
+    req.log.error({ err }, "fleet login failed");
+    return res.status(500).json({ error: "登入失敗" });
+  }
+});
+
+// ── POST /auth/login/admin ───────────────────────────────────────────────────
+router.post("/auth/login/admin", async (req, res) => {
+  try {
+    const { username, password } = req.body as { username: string; password: string };
+    if (!username || !password) {
+      return res.status(400).json({ error: "請提供帳號與密碼" });
+    }
+    const [user] = await db
+      .select()
+      .from(adminUsers)
+      .where(and(eq(adminUsers.username, username.trim()), eq(adminUsers.isActive, true)));
+
+    if (!user) return res.status(401).json({ error: "帳號或密碼錯誤" });
+    const [salt] = user.passwordHash.split(":");
+    if (hashPassword(password, salt) !== user.passwordHash) {
+      return res.status(401).json({ error: "帳號或密碼錯誤" });
+    }
+
+    await db.update(adminUsers).set({ lastLoginAt: new Date() }).where(eq(adminUsers.id, user.id));
+
+    const token = signJwt({ role: "admin", id: user.id, name: user.displayName, username: user.username });
+    return res.json({ token, user: { id: user.id, role: "admin", name: user.displayName, username: user.username } });
+  } catch (err) {
+    req.log.error({ err }, "Admin login failed");
+    res.status(500).json({ error: "登入失敗，請稍後再試" });
+  }
+});
+
+// ── POST /auth/login/fleet-owner ─────────────────────────────────────────────
+// 加盟車行老闆登入
+router.post("/auth/login/fleet-owner", async (req, res) => {
+  try {
+    const { username, password } = req.body as { username: string; password: string };
+    if (!username || !password) {
+      return res.status(400).json({ error: "請提供帳號與密碼" });
+    }
+
+    const { rows } = await db.execute(sql`
+      SELECT id, name, username, password_hash, status,
+             commission_rate, platform_commission_rate, code
+      FROM franchisees
+      WHERE lower(username) = ${username.toLowerCase().trim()}
+    `);
+    const fleet = rows[0] as any;
+
+    if (!fleet) return res.status(401).json({ error: "帳號或密碼錯誤" });
+    if (fleet.status === "suspended") return res.status(403).json({ error: "車行帳號已停用，請聯繫平台" });
+    if (!fleet.password_hash) return res.status(401).json({ error: "帳號尚未設定密碼，請聯繫平台管理員" });
+
+    const [salt] = (fleet.password_hash as string).split(":");
+    if (hashPassword(password, salt) !== fleet.password_hash) {
+      return res.status(401).json({ error: "帳號或密碼錯誤" });
+    }
+
+    await db.execute(sql`
+      UPDATE franchisees SET last_login_at = NOW() WHERE id = ${fleet.id}
+    `);
+
+    const token = signJwt({
+      role: "fleet_owner",
+      franchisee_id: fleet.id,
+      franchisee_name: fleet.name,
+    } as any);
+
+    return res.json({
+      token,
+      user: {
+        role: "fleet_owner",
+        franchisee_id: fleet.id,
+        franchisee_name: fleet.name,
+        code: fleet.code,
+        username: fleet.username,
+      },
+    });
+  } catch (err) {
+    req.log?.error?.({ err }, "fleet-owner login failed");
+    return res.status(500).json({ error: "登入失敗，請稍後再試" });
+  }
+});
+
+// ── POST /auth/login/fleet-driver ─────────────────────────────────────────────
+// 加盟車行司機登入（供 FlutterFlow 手機端使用）
+router.post("/auth/login/fleet-driver", async (req, res) => {
+  try {
+    const { username, password } = req.body as { username: string; password: string };
+    if (!username || !password) {
+      return res.status(400).json({ error: "請提供帳號與密碼" });
+    }
+
+    const { rows } = await db.execute(sql`
+      SELECT d.id, d.name, d.username, d.password, d.franchisee_id, d.status,
+             d.vehicle_type, d.license_plate,
+             f.name AS fleet_name, f.code AS fleet_code, f.status AS fleet_status
+      FROM drivers d
+      JOIN franchisees f ON f.id = d.franchisee_id
+      WHERE lower(d.username) = ${username.toLowerCase().trim()}
+        AND d.franchisee_id IS NOT NULL
+    `);
+    const driver = rows[0] as any;
+
+    if (!driver) return res.status(401).json({ error: "帳號或密碼錯誤" });
+    if (driver.fleet_status === "suspended") return res.status(403).json({ error: "所屬車行已停用" });
+    if (!driver.password) return res.status(401).json({ error: "帳號尚未設定密碼" });
+
+    const [salt] = (driver.password as string).split(":");
+    if (hashPassword(password, salt) !== driver.password) {
+      return res.status(401).json({ error: "帳號或密碼錯誤" });
+    }
+
+    const token = signJwt({
+      role: "fleet_driver",
+      franchisee_id: driver.franchisee_id,
+      franchisee_name: driver.fleet_name,
+      driver_id: driver.id,
+      driver_name: driver.name,
+    } as any);
+
+    return res.json({
+      token,
+      user: {
+        role: "fleet_driver",
+        driver_id: driver.id,
+        driver_name: driver.name,
+        franchisee_id: driver.franchisee_id,
+        fleet_name: driver.fleet_name,
+        fleet_code: driver.fleet_code,
+        vehicle_type: driver.vehicle_type,
+        license_plate: driver.license_plate,
+      },
+    });
+  } catch (err) {
+    req.log?.error?.({ err }, "fleet-driver login failed");
+    return res.status(500).json({ error: "登入失敗，請稍後再試" });
+  }
+});
+
+// ── GET /auth/me ─────────────────────────────────────────────────────────────
+router.get("/auth/me", (req, res) => {
+  const token = extractBearerToken(req.headers.authorization);
+  if (!token) return res.status(401).json({ error: "未登入" });
+  const payload = verifyJwt(token);
+  if (!payload) return res.status(401).json({ error: "Token 無效或已過期" });
+  res.json({ id: payload.id, role: payload.role, name: payload.name, phone: payload.phone, username: payload.username });
+});
+
+// ── LINE Login OAuth ──────────────────────────────────────────────────────────
+const LINE_LOGIN_URL = "https://access.line.me/oauth2/v2.1/authorize";
+const LINE_TOKEN_URL = "https://api.line.me/oauth2/v2.1/token";
+const LINE_PROFILE_URL = "https://api.line.me/v2/profile";
+
+router.get("/auth/line/url", (req, res) => {
+  const channelId = process.env.LINE_LOGIN_CHANNEL_ID;
+  if (!channelId) return res.status(503).json({ error: "LINE Login 未設定" });
+
+  const role = String(req.query.role ?? "customer");
+  const appBase = process.env.APP_BASE_URL ?? "";
+  const callbackUri = `${appBase}/api/auth/line/callback`;
+  const state = Buffer.from(JSON.stringify({ role })).toString("base64url");
+
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: channelId,
+    redirect_uri: callbackUri,
+    state,
+    scope: "profile openid",
+  });
+
+  res.json({ url: `${LINE_LOGIN_URL}?${params}` });
+});
+
+router.get("/auth/line/callback", async (req, res) => {
+  const channelId = process.env.LINE_LOGIN_CHANNEL_ID;
+  const channelSecret = process.env.LINE_LOGIN_CHANNEL_SECRET;
+  const appBase = process.env.APP_BASE_URL ?? "";
+
+  if (!channelId || !channelSecret) return res.status(503).send("LINE Login 未設定");
+
+  const { code, state, error: lineError } = req.query as Record<string, string>;
+  if (lineError || !code) {
+    return res.redirect(`${appBase}/login?error=line_cancelled`);
+  }
+
+  let role = "customer";
+  try {
+    const parsed = JSON.parse(Buffer.from(state, "base64url").toString());
+    role = parsed.role ?? "customer";
+  } catch {}
+
+  try {
+    const callbackUri = `${appBase}/api/auth/line/callback`;
+    const tokenResp = await fetch(LINE_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: callbackUri,
+        client_id: channelId,
+        client_secret: channelSecret,
+      }).toString(),
+    });
+    if (!tokenResp.ok) throw new Error("Token exchange failed");
+    const { access_token } = await tokenResp.json() as { access_token: string };
+
+    const profileResp = await fetch(LINE_PROFILE_URL, {
+      headers: { Authorization: `Bearer ${access_token}` },
+    });
+    if (!profileResp.ok) throw new Error("Profile fetch failed");
+    const profile = await profileResp.json() as { userId: string; displayName: string; pictureUrl?: string };
+
+    const [existing] = await db
+      .select()
+      .from(lineAccountsTable)
+      .where(eq(lineAccountsTable.lineUserId, profile.userId));
+
+    if (existing) {
+      await db.update(lineAccountsTable)
+        .set({ displayName: profile.displayName, pictureUrl: profile.pictureUrl ?? null, updatedAt: new Date() })
+        .where(eq(lineAccountsTable.lineUserId, profile.userId));
+
+      if (existing.userType === "customer") {
+        const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, Number(existing.userRefId)));
+        if (customer) {
+          const token = signJwt({ role: "customer", id: customer.id, name: customer.name, phone: customer.phone });
+          return res.redirect(`${appBase}/login/callback?token=${token}`);
+        }
+      }
+      if (existing.userType === "driver") {
+        const [driver] = await db.select().from(driversTable).where(eq(driversTable.id, Number(existing.userRefId)));
+        if (driver) {
+          const token = signJwt({ role: "driver", id: driver.id, name: driver.name, phone: driver.phone });
+          return res.redirect(`${appBase}/login/callback?token=${token}`);
+        }
+      }
+    }
+
+    return res.redirect(`${appBase}/login/line-link?lineUserId=${encodeURIComponent(profile.userId)}&displayName=${encodeURIComponent(profile.displayName)}&role=${role}`);
+  } catch (err) {
+    req.log.error({ err }, "LINE callback failed");
+    return res.redirect(`${appBase}/login?error=line_failed`);
+  }
+});
+
+// ── POST /auth/register/customer ─────────────────────────────────────────────
+// 一般客戶自助申請帳號（姓名 + 手機 + 密碼）
+router.post("/auth/register/customer", async (req, res) => {
+  try {
+    const { name, phone: rawPhone, password } = req.body as { name?: string; phone?: string; password?: string };
+    const name_ = (name ?? "").trim();
+    const phone = normalizePhone((rawPhone ?? "").trim());
+    const pwd   = (password ?? "").trim();
+
+    if (!name_ || name_.length < 2)        return res.status(400).json({ error: "請輸入真實姓名（至少 2 字）" });
+    if (!isValidTaiwanPhone(phone))         return res.status(400).json({ error: "請輸入有效的台灣手機號碼（09開頭，共10位）" });
+    if (pwd.length < 6)                     return res.status(400).json({ error: "密碼至少 6 位" });
+
+    const existing = await db.select({ id: customersTable.id }).from(customersTable).where(eq(customersTable.phone, phone)).limit(1);
+    if (existing.length) return res.status(409).json({ error: "此手機號碼已有帳號，請直接登入" });
+
+    const hashed = hashPassword(pwd);
+    await db.insert(customersTable).values({ name: name_, phone, password: hashed, isActive: false }).returning();
+    return res.status(201).json({ ok: true, message: "申請成功！帳號審核通過後即可登入，我們將以電話通知您。" });
+  } catch (err) {
+    req.log.error({ err }, "register customer failed");
+    res.status(500).json({ error: "申請失敗，請稍後再試" });
+  }
+});
+
+// ── POST /auth/register/enterprise ───────────────────────────────────────────
+// 企業客戶自助申請（公司名稱 + 聯絡人 + 手機 + 統編 + 密碼）
+router.post("/auth/register/enterprise", async (req, res) => {
+  try {
+    const { companyName, contactPerson, phone: rawPhone, taxId, address, password } = req.body as {
+      companyName?: string; contactPerson?: string; phone?: string; taxId?: string; address?: string; password?: string;
+    };
+    const name_ = (companyName ?? "").trim();
+    const contact = (contactPerson ?? "").trim();
+    const phone   = normalizePhone((rawPhone ?? "").trim());
+    const pwd     = (password ?? "").trim();
+
+    if (!name_ || name_.length < 2)   return res.status(400).json({ error: "請輸入公司名稱" });
+    if (!contact)                      return res.status(400).json({ error: "請輸入聯絡人姓名" });
+    if (!isValidTaiwanPhone(phone))    return res.status(400).json({ error: "請輸入有效的台灣手機號碼" });
+    if (pwd.length < 6)               return res.status(400).json({ error: "密碼至少 6 位" });
+
+    const existing = await db.select({ id: customersTable.id }).from(customersTable).where(eq(customersTable.phone, phone)).limit(1);
+    if (existing.length) return res.status(409).json({ error: "此手機號碼已有帳號，請直接登入" });
+
+    const hashed = hashPassword(pwd);
+    await db.insert(customersTable).values({
+      name: name_, phone, password: hashed,
+      contactPerson: contact,
+      taxId: (taxId ?? "").trim() || null,
+      address: (address ?? "").trim() || null,
+      isActive: false,
+    });
+    return res.status(201).json({ ok: true, message: "企業帳號申請成功！審核通過後即可登入，我們將以電話通知您。" });
+  } catch (err) {
+    req.log.error({ err }, "register enterprise failed");
+    res.status(500).json({ error: "申請失敗，請稍後再試" });
+  }
+});
+
+// ── POST /auth/register/driver ────────────────────────────────────────────────
+// 司機自助申請（姓名 + 手機 + 車種 + 車牌 + 密碼）→ 後台審核後啟用
+router.post("/auth/register/driver", async (req, res) => {
+  try {
+    const { name, phone: rawPhone, vehicleType, licensePlate, password } = req.body as {
+      name?: string; phone?: string; vehicleType?: string; licensePlate?: string; password?: string;
+    };
+    const name_  = (name ?? "").trim();
+    const phone  = normalizePhone((rawPhone ?? "").trim());
+    const vType  = (vehicleType ?? "").trim();
+    const plate  = (licensePlate ?? "").trim().toUpperCase();
+    const pwd    = (password ?? "").trim();
+
+    if (!name_ || name_.length < 2)  return res.status(400).json({ error: "請輸入真實姓名" });
+    if (!isValidTaiwanPhone(phone))  return res.status(400).json({ error: "請輸入有效的台灣手機號碼" });
+    if (!vType)                      return res.status(400).json({ error: "請選擇車種" });
+    if (!plate || plate.length < 4)  return res.status(400).json({ error: "請輸入有效車牌" });
+    if (pwd.length < 6)              return res.status(400).json({ error: "密碼至少 6 位" });
+
+    const existing = await db.select({ id: driversTable.id }).from(driversTable).where(eq(driversTable.phone, phone)).limit(1);
+    if (existing.length) return res.status(409).json({ error: "此手機號碼已有司機帳號" });
+
+    const hashed   = hashPassword(pwd);
+    const username = `d${phone.slice(-6)}`;
+    const inserted = await db.insert(driversTable).values({
+      name: name_, phone, vehicleType: vType, licensePlate: plate,
+      username, password: hashed, status: "offline",
+    }).returning({ id: driversTable.id });
+    const driverId = inserted[0]?.id;
+
+    // 產生 6 位英數字綁定碼（效期 48 小時）
+    let lineBindingToken: string | null = null;
+    if (driverId) {
+      const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      lineBindingToken = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+      const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+      await db.execute(sql`
+        UPDATE drivers
+        SET line_binding_token = ${lineBindingToken},
+            line_token_expires_at = ${expiresAt}
+        WHERE id = ${driverId}
+      `);
+    }
+
+    return res.status(201).json({
+      ok: true,
+      message: "申請成功！資料審核通過後即可登入，我們將以電話通知您。",
+      lineBindingToken,
+    });
+  } catch (err) {
+    req.log.error({ err }, "register driver failed");
+    res.status(500).json({ error: "申請失敗，請稍後再試" });
+  }
+});
+
+// ── POST /auth/login/customer/password ────────────────────────────────────────
+// 一般客戶以 帳號(username) 或 手機號碼 + 密碼登入
+router.post("/auth/login/customer/password", async (req, res) => {
+  try {
+    const identifier = String(req.body?.phone ?? req.body?.username ?? "").trim();
+    const pwd = String(req.body?.password ?? "").trim();
+    if (!identifier || !pwd) return res.status(400).json({ error: "請提供帳號（或手機號碼）與密碼" });
+
+    // 判斷是手機號碼還是帳號名稱
+    const isPhone = /^0\d{8,9}$/.test(normalizePhone(identifier));
+    let customer;
+    if (isPhone) {
+      [customer] = await db.select().from(customersTable)
+        .where(eq(customersTable.phone, normalizePhone(identifier))).limit(1);
+    } else {
+      [customer] = await db.select().from(customersTable)
+        .where(sql`lower(${customersTable.username}) = ${identifier.toLowerCase()}`).limit(1);
+    }
+
+    if (!customer || !customer.password) return res.status(401).json({ error: "帳號不存在或尚未設定密碼" });
+
+    const isHashed = customer.password.includes(":");
+    const valid = isHashed ? checkPassword(pwd, customer.password) : customer.password === pwd;
+    if (!valid) return res.status(401).json({ error: "密碼錯誤" });
+    if (!customer.isActive) return res.status(403).json({ error: "帳號審核中，尚未開通。請等待管理員啟用，我們將電話通知您。" });
+
+    const token = signJwt({ role: "customer", id: customer.id, name: customer.name, phone: customer.phone });
+    return res.json({ token, user: { id: customer.id, role: "customer", name: customer.name, phone: customer.phone } });
+  } catch (err) {
+    req.log.error({ err }, "customer password login failed");
+    res.status(500).json({ error: "登入失敗" });
+  }
+});
+
+// ── POST /auth/line/link ──────────────────────────────────────────────────────
+router.post("/auth/line/link", async (req, res) => {
+  try {
+    const { lineUserId, displayName, pictureUrl, phone, role } = req.body as {
+      lineUserId: string; displayName: string; pictureUrl?: string; phone: string; role: string;
+    };
+    if (!lineUserId || !phone) return res.status(400).json({ error: "缺少必要資料" });
+
+    const normalizedPhone = normalizePhone(phone);
+    const [customer] = await db.select().from(customersTable).where(eq(customersTable.phone, normalizedPhone));
+    if (!customer) return res.status(404).json({ error: "找不到此手機號碼的客戶帳號" });
+
+    await db.insert(lineAccountsTable)
+      .values({ userType: role ?? "customer", userRefId: String(customer.id), lineUserId, displayName, pictureUrl: pictureUrl ?? null })
+      .onConflictDoUpdate({ target: lineAccountsTable.lineUserId, set: { displayName, pictureUrl: pictureUrl ?? null, updatedAt: new Date(), userRefId: String(customer.id) } });
+
+    const token = signJwt({ role: "customer", id: customer.id, name: customer.name, phone: customer.phone });
+    return res.json({ token, user: { id: customer.id, role: "customer", name: customer.name, phone: customer.phone } });
+  } catch (err) {
+    req.log.error({ err }, "LINE link failed");
+    res.status(500).json({ error: "綁定失敗" });
+  }
+});
+
+export default router;
