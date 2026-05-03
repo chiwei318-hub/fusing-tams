@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import express, { type Express, type NextFunction } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
@@ -800,23 +797,5 @@ _migPool.query(`
     console.warn("[PushNotif] schema 建立失敗:", String(e).slice(0, 200));
   }
 })();
-
-// 正式環境／Docker：由同一個 Node 提供 Vite 建置後的前端（artifacts/logistics/dist/public）
-const __filename = fileURLToPath(import.meta.url);
-const __dirnameApi = path.dirname(__filename);
-const defaultFrontendDist = path.join(__dirnameApi, "../../logistics/dist/public");
-const frontendDistPath = process.env.FRONTEND_DIST ?? defaultFrontendDist;
-
-if (fs.existsSync(frontendDistPath)) {
-  logger.info({ frontendDistPath }, "Serving frontend static files");
-  app.use(express.static(frontendDistPath, { index: false }));
-  app.get("/{*splat}", (req, res, next) => {
-    if (req.path.startsWith("/api")) return next();
-    const indexFile = path.join(frontendDistPath, "index.html");
-    res.sendFile(indexFile, (err) => next(err));
-  });
-} else {
-  logger.warn({ frontendDistPath }, "Frontend build not found (artifacts/logistics/dist/public); API-only mode");
-}
 
 export default app;
