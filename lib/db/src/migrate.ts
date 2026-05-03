@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
+import { existsSync } from "node:fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -28,9 +29,11 @@ export async function runMigrations(): Promise<void> {
   try {
     const db = drizzle(pool);
 
-    // Default: lib/db/drizzle/ (one level up from src/). Override with DRIZZLE_MIGRATIONS_PATH for Docker/deploy.
-    const migrationsFolder =
-      process.env.DRIZZLE_MIGRATIONS_PATH || path.join(__dirname, "../drizzle");
+    // Docker (WORKDIR /app): /app/lib/db/drizzle. Local dev: ../drizzle from this file. Override: DRIZZLE_MIGRATIONS_PATH.
+    const defaultFolder = existsSync("/app/lib/db/drizzle")
+      ? "/app/lib/db/drizzle"
+      : path.join(__dirname, "../drizzle");
+    const migrationsFolder = process.env.DRIZZLE_MIGRATIONS_PATH || defaultFolder;
 
     console.log("[migrate] Running Drizzle migrations from", migrationsFolder);
     await migrate(db, { migrationsFolder });
