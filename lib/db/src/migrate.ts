@@ -28,8 +28,9 @@ export async function runMigrations(): Promise<void> {
   try {
     const db = drizzle(pool);
 
-    // Migrations folder is at lib/db/drizzle/ — two levels up from src/
-    const migrationsFolder = path.join(__dirname, "../../drizzle");
+    // Default: lib/db/drizzle/ (one level up from src/). Override with DRIZZLE_MIGRATIONS_PATH for Docker/deploy.
+    const migrationsFolder =
+      process.env.DRIZZLE_MIGRATIONS_PATH || path.join(__dirname, "../drizzle");
 
     console.log("[migrate] Running Drizzle migrations from", migrationsFolder);
     await migrate(db, { migrationsFolder });
