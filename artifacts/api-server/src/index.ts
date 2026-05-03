@@ -1,9 +1,19 @@
 import { loadEnvFiles } from "./lib/loadEnv";
 import { ensureProcessTimeZone } from "./lib/timezone";
 import { logger } from "./lib/logger";
+import { runMigrations } from "@workspace/db";
 
 loadEnvFiles();
 ensureProcessTimeZone();
+
+// Run Drizzle migrations before starting the server so all schema tables exist
+try {
+  await runMigrations();
+} catch (err) {
+  logger.error({ err }, "[migrate] Failed to run database migrations");
+  process.exit(1);
+}
+
 const { default: app } = await import("./app");
 
 const rawPort = process.env["PORT"];
