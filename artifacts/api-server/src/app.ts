@@ -810,7 +810,7 @@ const frontendDistPath = process.env.FRONTEND_DIST ?? defaultFrontendDist;
 if (fs.existsSync(frontendDistPath)) {
   logger.info({ frontendDistPath }, "Serving frontend static files");
   app.use(express.static(frontendDistPath, { index: false }));
-  app.get("*", (req, res, next) => {
+  app.get("/{*splat}", (req, res, next) => {
     if (req.path.startsWith("/api")) return next();
     const indexFile = path.join(frontendDistPath, "index.html");
     res.sendFile(indexFile, (err) => next(err));
