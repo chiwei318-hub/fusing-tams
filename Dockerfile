@@ -11,11 +11,10 @@ COPY tsconfig.json tsconfig.base.json ./
 
 RUN pnpm install --no-frozen-lockfile
 RUN pnpm run build:api
-RUN cd artifacts/logistics && pnpm install --no-frozen-lockfile && pnpm run build
+RUN pnpm --filter @workspace/logistics run build
 
 EXPOSE 8080
-ENV NODE_ENV=production
 ENV PORT=8080
-ENV DRIZZLE_MIGRATIONS_PATH=/app/lib/db/drizzle
+ENV NODE_ENV=production
 
 CMD ["node", "artifacts/api-server/dist/index.mjs"]
