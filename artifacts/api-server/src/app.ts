@@ -72,6 +72,14 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "Fusing TMS API Server",
+    version: "1.0.0"
+  });
+});
+
 startAlertScheduler();
 startWeeklyReportScheduler();
 
