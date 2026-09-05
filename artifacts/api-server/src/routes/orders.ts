@@ -63,6 +63,17 @@ ensureOrderFinanceColumns().catch(console.error);
 // profit_amount = total_fee - cost_amount - vat_amount
 // fleet_payout  = rate_per_trip × (1 - commission_rate / 100)  [車隊單才計算]
 async function ensureOrderFinanceTrigger() {
+  // 防禦性保證：無論載入順序為何，這裡自己確保前置表/欄位存在
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS route_prefix_rates (
+      id SERIAL PRIMARY KEY,
+      prefix TEXT NOT NULL UNIQUE,
+      rate_per_trip NUMERIC(10,2) NOT NULL DEFAULT 0,
+      note TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`ALTER TABLE route_prefix_rates ADD COLUMN IF NOT EXISTS driver_pay_rate NUMERIC(10,2) DEFAULT 0`);
   // 1. 觸發器函式
   await pool.query(`
     CREATE OR REPLACE FUNCTION calc_order_finance()

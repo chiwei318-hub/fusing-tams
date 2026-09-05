@@ -212,7 +212,11 @@ ensureGoogleAuthColumns().catch((e) => console.error("[GoogleAuth] column setup 
 ensureInvitationsTable().catch((e) => console.error("[Invitations] table setup failed:", e));
 ensureOAuthAccountsTable().catch((e) => console.error("[OAuthAccounts] table setup failed:", e));
 ensureLocationTables()
-  .then(() => importLocationHistory())
+  .then(async () => {
+    // Lat/lng columns live on dispatch_order_routes — ensure them before location import.
+    await ensureDispatchOrdersTable();
+    await importLocationHistory();
+  })
   .catch((e) => console.error("[LocationHistory] init failed:", e));
 ensureFreightRateTables().catch((e) => console.error("[FreightQuote] table setup failed:", e));
 ensurePartnersTable().catch((e) => console.error("[Partners] table setup failed:", e));
@@ -778,12 +782,72 @@ _migPool.query(`
     // push_notifications — 司機確認時間欄位
     await _migPool.query(`ALTER TABLE push_notifications ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ`);
 
+    // fleet_cash_settlements must exist before column ALTERs / settlementReminder queries
+    await _migPool.query(`
+      CREATE TABLE IF NOT EXISTS fleet_cash_settlements (
+        id                   SERIAL PRIMARY KEY,
+        fleet_id             INTEGER NOT NULL REFERENCES fusingao_fleets(id),
+        month                VARCHAR(7) NOT NULL,
+        shopee_income        NUMERIC(14,2) NOT NULL DEFAULT 0,
+        commission_rate      NUMERIC(5,2) NOT NULL DEFAULT 15,
+        fleet_receive        NUMERIC(14,2) NOT NULL DEFAULT 0,
+        trip_count           INTEGER NOT NULL DEFAULT 0,
+        fuel_total           NUMERIC(14,2) NOT NULL DEFAULT 0,
+        salary_total         NUMERIC(14,2) NOT NULL DEFAULT 0,
+        penalty_total        NUMERIC(14,2) NOT NULL DEFAULT 0,
+        misc_total           NUMERIC(14,2) NOT NULL DEFAULT 0,
+        cash_due             NUMERIC(14,2) NOT NULL DEFAULT 0,
+        total_salary         NUMERIC(14,2),
+        net_salary           NUMERIC(14,2),
+        note                 TEXT,
+        due_date             DATE,
+        payment_method       TEXT,
+        calc_complete_date   DATE,
+        status               TEXT NOT NULL DEFAULT 'pending',
+        paid_at              TIMESTAMPTZ,
+        paid_by              TEXT,
+        line_remind_5d_at    TIMESTAMPTZ,
+        line_remind_1d_at    TIMESTAMPTZ,
+        line_overdue_notified_at TIMESTAMPTZ,
+        created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (fleet_id, month)
+      )
+    `);
+    await _migPool.query(`
+      CREATE TABLE IF NOT EXISTS fleet_settlement_misc (
+        id            SERIAL PRIMARY KEY,
+        settlement_id INTEGER NOT NULL REFERENCES fleet_cash_settlements(id) ON DELETE CASCADE,
+        label         TEXT NOT NULL,
+        amount        NUMERIC(12,2) NOT NULL DEFAULT 0
+      )
+    `);
+
     // fleet_cash_settlements — 計算完成日 + LINE 提醒時間戳
     await _migPool.query(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS calc_complete_date DATE`);
     await _migPool.query(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS line_remind_5d_at TIMESTAMPTZ`);
     await _migPool.query(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS line_remind_1d_at TIMESTAMPTZ`);
     await _migPool.query(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS line_overdue_notified_at TIMESTAMPTZ`);
 
+    // fleet_drivers must exist before column ALTERs (過去只有 ALTER 沒有 CREATE)
+    await _migPool.query(`
+      CREATE TABLE IF NOT EXISTS fleet_drivers (
+        id SERIAL PRIMARY KEY,
+        fleet_id INTEGER NOT NULL REFERENCES fusingao_fleets(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        phone TEXT,
+        id_number TEXT,
+        vehicle_plate TEXT,
+        vehicle_type TEXT DEFAULT '一般',
+        line_id TEXT,
+        notes TEXT,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        inspection_expire_date DATE,
+        insurance_expire_date DATE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
     // fleet_drivers — 驗車/保險到期欄位
     await _migPool.query(`ALTER TABLE fleet_drivers ADD COLUMN IF NOT EXISTS inspection_expire_date DATE`);
     await _migPool.query(`ALTER TABLE fleet_drivers ADD COLUMN IF NOT EXISTS insurance_expire_date  DATE`);

@@ -49,6 +49,9 @@ async function ensureFusingaoFleetColumns() {
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  try {
+    await db.execute(sql`ALTER TABLE route_prefix_rates ADD COLUMN IF NOT EXISTS driver_pay_rate NUMERIC(10,2) DEFAULT 0`);
+  } catch { /* ignore */ }
   // Ensure fusingao fleet columns on orders (fleet grab/complete tracking)
   const fleetOrderCols = [
     `ALTER TABLE orders ADD COLUMN IF NOT EXISTS fusingao_fleet_id INTEGER`,
@@ -59,6 +62,25 @@ async function ensureFusingaoFleetColumns() {
     `ALTER TABLE orders ADD COLUMN IF NOT EXISTS fleet_driver_name TEXT`,
     `ALTER TABLE orders ADD COLUMN IF NOT EXISTS fleet_vehicle_plate TEXT`,
   ];
+  // Fleet drivers table (核心表，過去只有 ALTER 沒有 CREATE，這裡補上)
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS fleet_drivers (
+      id SERIAL PRIMARY KEY,
+      fleet_id INTEGER NOT NULL REFERENCES fusingao_fleets(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      phone TEXT,
+      id_number TEXT,
+      vehicle_plate TEXT,
+      vehicle_type TEXT DEFAULT '一般',
+      line_id TEXT,
+      notes TEXT,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      inspection_expire_date DATE,
+      insurance_expire_date DATE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `));
   // Add extra columns to fleet_drivers if not exists
   try {
     await db.execute(sql.raw(`ALTER TABLE fleet_drivers ADD COLUMN IF NOT EXISTS atoms_account TEXT`));
@@ -161,6 +183,12 @@ async function ensureFusingaoFleetColumns() {
   await db.execute(sql.raw(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS due_date DATE`));
   await db.execute(sql.raw(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS payment_method VARCHAR(20)`));
   await db.execute(sql.raw(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`));
+  await db.execute(sql.raw(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS calc_complete_date DATE`));
+  await db.execute(sql.raw(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS line_remind_5d_at TIMESTAMPTZ`));
+  await db.execute(sql.raw(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS line_remind_1d_at TIMESTAMPTZ`));
+  await db.execute(sql.raw(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS line_overdue_notified_at TIMESTAMPTZ`));
+  await db.execute(sql.raw(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS total_salary NUMERIC(12,2)`));
+  await db.execute(sql.raw(`ALTER TABLE fleet_cash_settlements ADD COLUMN IF NOT EXISTS net_salary NUMERIC(12,2)`));
   // Settlement reminder log
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS fleet_settlement_reminders (

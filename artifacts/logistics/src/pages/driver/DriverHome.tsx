@@ -205,8 +205,9 @@ export default function DriverHome() {
     );
   }
 
-  const avgStars = perf?.stats ? parseFloat(perf.stats.avg_stars) : null;
-  const totalRatings = perf?.stats ? parseInt(perf.stats.total) : 0;
+  const parsedAvg = parseFloat(perf?.stats?.avg_stars ?? "");
+  const avgStars = Number.isFinite(parsedAvg) ? parsedAvg : null;
+  const totalRatings = perf?.stats ? parseInt(perf.stats.total) || 0 : 0;
   const activeEvent = perf?.events?.find(e => !e.is_resolved);
 
   return (
