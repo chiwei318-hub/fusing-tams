@@ -7,9 +7,10 @@
  *   2. calcOrderFinance()          — 純函式，計算各財務欄位值（在 POST/PUT 路由呼叫）
  *
  * 11 欄位總覽：
- *   cost_amount      司機實領      = rate_per_trip
- *   profit_amount    平台毛利      = total_fee - cost - vat
- *   vat_amount       銷項稅        = total_fee × 5%（未稅外加）
+ *   cost_amount      直接運輸成本（趟次）= COALESCE(driver_pay_rate, rate_per_trip)
+ *   profit_amount    平台毛利      = total_fee - cost_amount
+ *                    （LOCKED: 不扣 VAT；≠ commission；≠ financials ×15%）
+ *   vat_amount       銷項稅        = total_fee × 5%（未稅外加；獨立欄位）
  *   withholding_tax  扣繳稅        薪資結算時處理（訂單層維持 0）
  *   tax_category     課稅類別      taxable / zero_rated / exempt
  *   is_tax_exempt    免稅旗標      離島、醫療等特殊情境
@@ -103,9 +104,9 @@ export function calcOrderFinance(params: OrderFinanceParams): OrderFinanceResult
   // 扣繳 — 訂單層不扣，在薪資結算模組（taxPayroll）處理
   const withholding_tax = 0;
 
-  // 平台毛利
+  // 平台毛利 = 未稅營收 − 直接運輸成本（不扣 VAT）
   const profit_amount =
-    Math.round((total_fee - cost_amount - vat_amount) * 100) / 100;
+    Math.round((total_fee - cost_amount) * 100) / 100;
 
   return { vat_amount, cost_amount, fleet_payout, withholding_tax, profit_amount };
 }

@@ -59,10 +59,11 @@ ensureOrderColumns().catch(console.error);
 ensureOrderFinanceColumns().catch(console.error);
 
 // ─── DB Trigger: auto-calculate order finance fields ──────────────────────────
-// cost_amount   = rate_per_trip（司機實領）
+// cost_amount   = COALESCE(driver_pay_rate, rate_per_trip)  from route_prefix_rates
 // vat_amount    = total_fee × 0.05（未稅外加；total_fee = net）
-// profit_amount = total_fee - cost_amount - vat_amount
-// fleet_payout  = rate_per_trip × (1 - commission_rate / 100)  [車隊單才計算]
+// profit_amount = total_fee - cost_amount
+//   LOCKED: VAT 不二次扣進 gross_profit；≠ commission / ≠ financials ×15%
+// fleet_payout  = rate × (1 - commission_rate / 100)  [車隊單才計算]
 async function ensureOrderFinanceTrigger() {
   // 防禦性保證：無論載入順序為何，這裡自己確保前置表/欄位存在
   await pool.query(`
@@ -93,12 +94,12 @@ async function ensureOrderFinanceTrigger() {
 
       v_rate := COALESCE(v_rate, 0);
 
-      -- 銷項稅：未稅外加 5%（total_fee = net）；total_fee 為 NULL/≤0 時跳過損益
+      -- 銷項稅：未稅外加 5%（total_fee = net）；毛利不扣 VAT（LOCKED gross_profit）
       IF NEW.total_fee IS NOT NULL AND NEW.total_fee > 0 THEN
         v_vat := ROUND((NEW.total_fee * 0.05)::NUMERIC, 2);
         NEW.vat_amount    := v_vat;
         NEW.cost_amount   := v_rate;
-        NEW.profit_amount := ROUND((NEW.total_fee - v_rate - v_vat)::NUMERIC, 2);
+        NEW.profit_amount := ROUND((NEW.total_fee - v_rate)::NUMERIC, 2);
       ELSE
         -- 無收費（蝦皮外包單）：只記成本，不算損益
         NEW.vat_amount    := 0;
@@ -161,7 +162,6 @@ async function ensureOrderFinanceTrigger() {
                                    (SELECT COALESCE(NULLIF(pr.driver_pay_rate,0), pr.rate_per_trip, 0)
                                       FROM route_prefix_rates pr WHERE pr.prefix = o.route_prefix LIMIT 1),
                                    0)
-                               - ROUND((o.total_fee * 0.05)::NUMERIC, 2)
                              )::NUMERIC, 2)
                              ELSE o.profit_amount
                            END,

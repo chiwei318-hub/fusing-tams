@@ -29,7 +29,8 @@ export function orderFinanceTrigger({ total_fee, driver_pay_rate, rate_per_trip 
   }
   const total = Number(total_fee);
   const vat = round2(total * 0.05);
-  const profit = round2(total - rate - vat);
+  // LOCKED: profit = net - direct cost; VAT not subtracted
+  const profit = round2(total - rate);
   return { vat_amount: vat, cost_amount: rate, profit_amount: profit };
 }
 

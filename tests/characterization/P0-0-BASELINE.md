@@ -40,7 +40,7 @@ tests 23 | pass 23 | fail 0
 
 | Path | Tax / VAT | Cost / AP | Profit | Basis | Verdict |
 |------|-----------|-----------|--------|-------|---------|
-| `calc_order_finance` trigger | **500** | 800 | **8700** | exclusive | **FIXED** |
+| `calc_order_finance` trigger | **500** | 800 | **9200** | exclusive VAT; profit=net−cost（no VAT deduct） | **FIXED** (profit policy) |
 | `auto_create_financials` trigger | (grand = 10500) | AP **8000** | **1500** (`×0.15`) | fixed split | commercial (unchanged) |
 | `calcFinancials` JS | AR tax **500** | AP **8000** | **2000** | exclusive | OK |
 | `monthlyBilling` generate | **500** | — | — | exclusive | OK |

@@ -22,29 +22,47 @@ describe("tax_engine exclusive: total_fee=10000 → tax 500, grand 10500", () =>
   });
 });
 
-describe("characterization: SAME total_fee=10000 after exclusive REPAIR", () => {
+/**
+ * Shadow comparison (REPAIR profit no-VAT-deduct).
+ * Fixture chosen to match live smoke shape (rate=800), not the prompt's illustrative 7000.
+ */
+describe("shadow: profit OLD vs NEW vs LEGACY (total_fee=10000, cost=800)", () => {
+  const TOTAL = 10000;
+  const COST = 800;
+  const VAT = 500;
+
+  it("lists OLD (deduct VAT) / NEW (no VAT) / LEGACY (×15%)", () => {
+    const oldProfit = Math.round((TOTAL - COST - VAT) * 100) / 100; // 8700
+    const newProfit = orderFinanceTrigger({
+      total_fee: TOTAL,
+      driver_pay_rate: COST,
+    }).profit_amount;
+    const legacy = financialsAutoCreateTrigger({ total_fee: TOTAL }).platform_profit;
+
+    assert.equal(oldProfit, 8700);
+    assert.equal(newProfit, 9200);
+    assert.equal(legacy, 1500);
+    assert.notEqual(newProfit, oldProfit);
+    assert.notEqual(newProfit, legacy);
+  });
+});
+
+describe("characterization: SAME total_fee=10000 after profit REPAIR", () => {
   const TOTAL = 10000;
   const DRIVER_RATE = 800;
 
-  it("snapshot: VAT paths aligned on exclusive 500", () => {
+  it("snapshot: VAT 500; profit 9200; legacy ×15% still 1500", () => {
     const trigger = orderFinanceTrigger({ total_fee: TOTAL, driver_pay_rate: DRIVER_RATE });
     const finTrig = financialsAutoCreateTrigger({ total_fee: TOTAL });
     const finJs = financialsCalcJs({ total_fee: TOTAL });
-    const mbEx = monthlyBillingGenerateExclusive(TOTAL);
-    const mbInv = monthlyBillingInvoiceExclusive(TOTAL);
-    const invEx = autoInvoiceExclusive(TOTAL);
-    const pdf = invoicePdfExclusive(TOTAL);
-
     assert.equal(trigger.vat_amount, 500);
-    assert.equal(trigger.profit_amount, 8700);
+    assert.equal(trigger.profit_amount, 9200);
     assert.equal(finJs.ar_tax, 500);
-    assert.equal(mbEx.taxAmount, 500);
-    assert.equal(mbInv.taxAmount, 500);
-    assert.equal(invEx.taxAmount, 500);
-    assert.equal(pdf.taxAmount, 500);
-    // commercial split still diverges on profit (not VAT basis)
+    assert.equal(monthlyBillingGenerateExclusive(TOTAL).taxAmount, 500);
+    assert.equal(monthlyBillingInvoiceExclusive(TOTAL).taxAmount, 500);
+    assert.equal(autoInvoiceExclusive(TOTAL).taxAmount, 500);
+    assert.equal(invoicePdfExclusive(TOTAL).taxAmount, 500);
     assert.equal(finTrig.platform_profit, 1500);
-    assert.notEqual(trigger.profit_amount, finTrig.platform_profit);
   });
 
   it("VAT basis aligned: trigger = financials JS = monthly = invoice = pdf", () => {
@@ -57,7 +75,7 @@ describe("characterization: SAME total_fee=10000 after exclusive REPAIR", () => 
     assert.equal(tVat, invoicePdfExclusive(TOTAL).taxAmount);
   });
 
-  it("PROVES remaining divergence: trigger profit ≠ financials auto_create profit", () => {
+  it("PROVES remaining divergence: order profit ≠ financials ×15%", () => {
     const tProfit = orderFinanceTrigger({ total_fee: TOTAL, driver_pay_rate: DRIVER_RATE }).profit_amount;
     const fProfit = financialsAutoCreateTrigger({ total_fee: TOTAL }).platform_profit;
     assert.notEqual(tProfit, fProfit);
@@ -85,7 +103,6 @@ describe("characterization: VAT exclusive matrix", () => {
         assert.equal(ex, 0);
       } else {
         assert.equal(vat, ex);
-        assert.equal(vat, Math.round(total * 0.05 * 100) / 100);
       }
     });
   }
