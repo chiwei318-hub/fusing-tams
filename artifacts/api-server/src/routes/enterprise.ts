@@ -180,6 +180,7 @@ router.post("/enterprise/:id/place-order", async (req, res) => {
     const [account] = await db.select().from(enterpriseAccountsTable).where(eq(enterpriseAccountsTable.id, id));
     if (!account) return res.status(404).json({ error: "帳號不存在" });
 
+    const pendingWrite = prepareStatusWrite("pending");
     const [order] = await db.insert(ordersTable).values({
       pickupAddress,
       pickupDate: pickupDate ?? null,
@@ -194,7 +195,8 @@ router.post("/enterprise/:id/place-order", async (req, res) => {
       customerPhone: contactPhone ?? account.phone,
       totalFee: totalFee ?? null,
       enterpriseId: id,
-      status: "pending",
+      status: pendingWrite.status,
+      orderStatus: pendingWrite.orderStatus,
     }).returning();
 
     if (saveTemplate && templateNickname) {
@@ -797,7 +799,10 @@ router.post("/enterprise/:id/orders/bulk-import", upload.single("file"), async (
             p.receiver_phone ? `電話：${p.receiver_phone}` : "",
             p.notes,
           ].filter(Boolean).join("；") || null,
-          status: "pending" as const,
+          ...(() => {
+            const w = prepareStatusWrite("pending");
+            return { status: w.status, orderStatus: w.orderStatus };
+          })(),
           source: "enterprise",
           enterpriseId,
         };
