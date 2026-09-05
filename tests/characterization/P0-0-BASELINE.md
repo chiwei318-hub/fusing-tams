@@ -33,23 +33,20 @@ tests 23 | pass 23 | fail 0
 
 ## Money: SAME INPUT → DIFFERENT OUTPUT (`total_fee = 10000`, rate = 800)
 
-> **WARNING — do not treat locked numbers as “correct tax law”.**  
-> Business rule confirmed 2026-09-06: **未稅外加** `tax = net × 0.05`, `grand = net × 1.05`.  
-> Rows marked **KNOWN_WRONG** still match **production code as of P0-0 / P0-1** (inclusive reverse).  
-> Rows marked **KNOWN_CORRECT** already match exclusive-add.  
-> Characterization freezes behavior so refactors cannot silently invent a third formula. Tax REPAIR is a separate change.
+> **Business rule (locked):** 未稅外加 `tax = net × 0.05`.  
+> **P0-Tax REPAIR:** trigger / orderFinanceColumns / monthlyBilling invoice / invoicePdf / taxPayroll 已改外加。  
+> Characterization mirrors updated to **KNOWN_CORRECT** exclusive numbers (500 / 10500).  
+> Remaining divergence: `auto_create_financials` profit `×0.15`（商業拆帳，非 VAT 稅基）.
 
 | Path | Tax / VAT | Cost / AP | Profit | Basis | Verdict |
 |------|-----------|-----------|--------|-------|---------|
-| `calc_order_finance` trigger | **476.19** | 800 | **8723.81** | inclusive reverse (`/1.05*0.05`) | **KNOWN_WRONG** |
-| `auto_create_financials` trigger | (grand = 10500) | AP **8000** | **1500** (`×0.15`) | fixed split; ignores driver rate | commercial split (out of VAT scope) |
-| `calcFinancials` JS | AR tax **500** | AP **8000** | **2000** | exclusive add | **KNOWN_CORRECT** (VAT) |
-| `monthlyBilling` generate | **500** | — | — | exclusive | **KNOWN_CORRECT** |
-| `monthlyBilling` invoice-from-bill | **476** | — | — | inclusive (self-conflict vs generate) | **KNOWN_WRONG** |
-| `autoInvoice` | **500** | — | — | exclusive | **KNOWN_CORRECT** |
-| `invoicePdf` | **476** | — | — | inclusive | **KNOWN_WRONG** |
-
-Fixtures also cover `total_fee` ∈ {0, 1000, 10000, 100000} and `driver_pay_rate` null / 0 / normal; live smoke `2100/800 → vat 100 / profit 1200` locked in (**KNOWN_WRONG** inclusive path until tax REPAIR).
+| `calc_order_finance` trigger | **500** | 800 | **8700** | exclusive | **FIXED** |
+| `auto_create_financials` trigger | (grand = 10500) | AP **8000** | **1500** (`×0.15`) | fixed split | commercial (unchanged) |
+| `calcFinancials` JS | AR tax **500** | AP **8000** | **2000** | exclusive | OK |
+| `monthlyBilling` generate | **500** | — | — | exclusive | OK |
+| `monthlyBilling` invoice-from-bill | **500** | — | — | exclusive on order sum | **FIXED** |
+| `autoInvoice` | **500** | — | — | exclusive | OK |
+| `invoicePdf` | **500** | — | — | exclusive on order sum | **FIXED** |
 
 ## Status inventory
 

@@ -14,7 +14,7 @@
     "heroku-postbuild": "pnpm run build:api",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "test:characterization": "node --test tests/characterization/money/*.test.mjs tests/characterization/status/*.test.mjs"
+    "test:characterization": "node --test tests/characterization/money/*.test.mjs tests/characterization/status/*.test.mjs tests/characterization/tax/*.test.mjs"
   },
   "private": true,
   "pnpm": {

@@ -13,6 +13,7 @@ import { sql } from "drizzle-orm";
 import { sendInvoiceEmail } from "../lib/email";
 import { sendInvoiceNotification } from "../lib/line";
 import { issueInvoice } from "../lib/invoiceProvider";
+import { calcExclusiveVat } from "../lib/taxEngine";
 
 export const monthlyBillingRouter = Router();
 
@@ -190,9 +191,12 @@ monthlyBillingRouter.post("/monthly-bills/:id/invoice", async (req, res) => {
   `);
   const orderList = orders.rows as any[];
 
-  const totalAmount  = Number(bill.total_amount);
-  const taxAmount    = Math.round(totalAmount / 1.05 * 0.05);
-  const amount       = totalAmount - taxAmount;
+  // 稅基 = 訂單未稅加總（外加）；不以 bill.total_amount 反推
+  const amount = orderList.reduce(
+    (s, o) => s + Number(o.total_fee ?? o.base_price ?? 0),
+    0,
+  );
+  const { taxAmount, grandTotal: totalAmount } = calcExclusiveVat(amount, { roundMode: "yuan" });
   const buyerName    = bill.enterprise_name ?? bill.customer_name_db ?? "客戶";
   const buyerTaxId   = bill.enterprise_tax_id ?? bill.customer_tax_id ?? null;
   const periodLabel  = `${bill.period_year}年${bill.period_month}月月結帳單（${orderList.length} 筆訂單）`;

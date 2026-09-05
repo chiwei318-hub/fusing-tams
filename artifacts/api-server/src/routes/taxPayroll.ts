@@ -550,8 +550,8 @@ taxPayrollRouter.get("/ledger/summary", async (req, res) => {
     `);
 
     const revenue    = Number((live.rows[0] as any)?.total_revenue ?? 0);
-    const vatOutput  = Math.round(revenue / 1.05 * 0.05);   // 銷項稅額
-    const netRevenue = revenue - vatOutput;
+    const vatOutput  = Math.round(revenue * 0.05);   // 銷項稅額（未稅外加；total_fee = net）
+    const netRevenue = revenue; // revenue 已是未稅加總；含稅合計 = revenue + vatOutput
 
     return res.json({
       ok: true,
@@ -598,7 +598,7 @@ taxPayrollRouter.get("/ledger/vat", async (req, res) => {
     }, {});
 
     const totalRevenue = (months[month1] ?? 0) + (months[month2] ?? 0);
-    const vatOutput    = Math.round(totalRevenue / 1.05 * 0.05);
+    const vatOutput    = Math.round(totalRevenue * 0.05); // 未稅外加
 
     const saved = await db.execute(sql`
       SELECT SUM(vat_input) AS total_vat_input
@@ -640,7 +640,7 @@ taxPayrollRouter.post("/ledger/close", async (req, res) => {
     `);
 
     const revenue          = Number((rev.rows[0] as any)?.revenue ?? 0);
-    const vatOutput        = Math.round(revenue / 1.05 * 0.05);
+    const vatOutput        = Math.round(revenue * 0.05); // 未稅外加
     const vatPayable       = Math.max(0, vatOutput - Number(vatInput));
     const netProfit        = revenue - Number(totalCost);
     const incomeTaxPayable = Math.round(Math.max(0, netProfit) * 0.20);

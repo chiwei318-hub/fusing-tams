@@ -8,6 +8,7 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PDFDocument = require("pdfkit");
+import { calcExclusiveVat } from "./taxEngine";
 
 const COMPANY_NAME = "富詠運輸有限公司";
 const COMPANY_TAX  = "12345678";
@@ -253,9 +254,15 @@ export function buildMonthlyBillPdf(params: MonthlyBillPdfParams): Promise<Buffe
     y += 4;
     doc.rect(50, y, W, 1).fill("#dde1e7"); y += 8;
 
-    // ── 合計 ──────────────────────────────────────────────────────────────
-    const taxAmt    = Math.round(params.totalAmount / 1.05 * 0.05);
-    const preTaxAmt = params.totalAmount - taxAmt;
+    // ── 合計（未稅外加：訂單明細加總為 net）──────────────────────────────
+    const netFromOrders = (params.orders ?? []).reduce(
+      (s, o) => s + Number(o.total_fee ?? o.base_price ?? 0),
+      0,
+    );
+    const vat = calcExclusiveVat(netFromOrders, { roundMode: "yuan" });
+    const preTaxAmt = vat.net;
+    const taxAmt = vat.taxAmount;
+    const payable = netFromOrders > 0 ? vat.grandTotal : Number(params.totalAmount);
     doc.fill("#555").fontSize(9)
        .text("稅前金額:", 400, y)
        .text(fmtAmt(preTaxAmt), 478, y, { width: 60, align: "right" });
@@ -266,7 +273,7 @@ export function buildMonthlyBillPdf(params: MonthlyBillPdfParams): Promise<Buffe
     doc.rect(400, y, 138, 1).fill("#ccc"); y += 6;
     doc.fill(BRAND_COLOR).fontSize(12).font("Helvetica-Bold")
        .text("應付合計:", 400, y)
-       .text(fmtAmt(params.totalAmount), 478, y, { width: 60, align: "right" });
+       .text(fmtAmt(payable), 478, y, { width: 60, align: "right" });
     y += 26;
 
     // ── 付款資訊 ─────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@
  * 11 欄位總覽：
  *   cost_amount      司機實領      = rate_per_trip
  *   profit_amount    平台毛利      = total_fee - cost - vat
- *   vat_amount       銷項稅        = total_fee / 1.05 × 5%
+ *   vat_amount       銷項稅        = total_fee × 5%（未稅外加）
  *   withholding_tax  扣繳稅        薪資結算時處理（訂單層維持 0）
  *   tax_category     課稅類別      taxable / zero_rated / exempt
  *   is_tax_exempt    免稅旗標      離島、醫療等特殊情境
@@ -21,6 +21,7 @@
  */
 
 import { pool } from "@workspace/db";
+import { vatOnNetCents } from "../lib/taxEngine";
 
 // ── DDL ───────────────────────────────────────────────────────────────────────
 
@@ -62,7 +63,7 @@ export async function ensureOrderFinanceColumns(): Promise<void> {
 // ── 計算公式（純函式，無副作用）─────────────────────────────────────────────
 
 export interface OrderFinanceParams {
-  total_fee:        number;       // 客戶含稅總額
+  total_fee:        number;       // 客戶未稅金額（net）
   rate_per_trip:    number;       // 司機跑單費（來自 route_prefix_rates）
   commission_rate?: number;       // 平台抽成 %（預設 15）
   is_tax_exempt?:   boolean;      // 是否免稅
@@ -86,11 +87,11 @@ export function calcOrderFinance(params: OrderFinanceParams): OrderFinanceResult
     tax_category    = "taxable",
   } = params;
 
-  // 銷項稅（含稅反推）
+  // 銷項稅（未稅外加）
   const vat_amount =
     is_tax_exempt || tax_category !== "taxable"
       ? 0
-      : Math.round((total_fee / 1.05) * 0.05 * 100) / 100;
+      : vatOnNetCents(total_fee);
 
   // 司機實領（成本）
   const cost_amount = rate_per_trip;
