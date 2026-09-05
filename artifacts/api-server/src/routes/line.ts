@@ -18,6 +18,7 @@ import {
   getLineUserProfile,
   type BroadcastOrderInfo,
 } from "../lib/line.js";
+import { prepareStatusWrite, prepareStatusWriteSql } from "../lib/orderStatusEngine.js";
 
 const router: IRouter = Router();
 
@@ -103,7 +104,8 @@ router.post("/line/webhook", async (req, res) => {
               await replyTextMessage(replyToken, `ℹ️ 訂單 #${orderId} 您已確認過接單，無需重複操作。`);
               continue;
             }
-            await db.update(ordersTable).set({ status: "assigned", driverAcceptedAt: now, updatedAt: now }).where(eq(ordersTable.id, orderId));
+            const w = prepareStatusWrite("assigned");
+            await db.update(ordersTable).set({ status: w.status, orderStatus: w.orderStatus, driverAcceptedAt: now, updatedAt: now }).where(eq(ordersTable.id, orderId));
 
             // 取貨時間格式化
             const pickupTimeStr = order.pickupTime
@@ -135,7 +137,8 @@ router.post("/line/webhook", async (req, res) => {
               if (driver) driverName = driver.name;
             }
 
-            await db.update(ordersTable).set({ driverId: null, status: "pending", updatedAt: now }).where(eq(ordersTable.id, orderId));
+            const w = prepareStatusWrite("pending");
+            await db.update(ordersTable).set({ driverId: null, status: w.status, orderStatus: w.orderStatus, updatedAt: now }).where(eq(ordersTable.id, orderId));
 
             // 回覆司機
             await replyTextMessage(replyToken, `已收到您的拒單，訂單 #${orderId} 將由系統重新安排司機。感謝告知！`);
@@ -160,7 +163,8 @@ router.post("/line/webhook", async (req, res) => {
               await replyTextMessage(replyToken, `ℹ️ 訂單 #${orderId} 已完成，無需重複操作。`);
               continue;
             }
-            await db.update(ordersTable).set({ status: "in_transit", updatedAt: now }).where(eq(ordersTable.id, orderId));
+            const w = prepareStatusWrite("in_transit");
+            await db.update(ordersTable).set({ status: w.status, orderStatus: w.orderStatus, updatedAt: now }).where(eq(ordersTable.id, orderId));
             await replyTextMessage(replyToken, `✅ 已記錄抵達！訂單 #${orderId} 狀態更新為「配送中」。\n\n請將貨物裝載後，完成配送並拍照上傳簽收單。`);
 
             // 推送含完成按鈕的 Flex 訊息（非同步，不影響回覆時效）
@@ -183,7 +187,8 @@ router.post("/line/webhook", async (req, res) => {
               await replyTextMessage(replyToken, `ℹ️ 訂單 #${orderId} 已完成，無需重複操作。`);
               continue;
             }
-            await db.update(ordersTable).set({ status: "delivered", updatedAt: now }).where(eq(ordersTable.id, orderId));
+            const w = prepareStatusWrite("delivered");
+            await db.update(ordersTable).set({ status: w.status, orderStatus: w.orderStatus, updatedAt: now }).where(eq(ordersTable.id, orderId));
 
             // 授予信用積分 +5（按時完成）
             let creditChange = 5;
@@ -466,9 +471,11 @@ router.post("/line/webhook", async (req, res) => {
 
             // 2. 原子搶單：WHERE status='pending' AND driver_id IS NULL
             // 若有其他人同時搶，此 UPDATE 只有一人成功（DB 層競態保護）
+            const grab = prepareStatusWriteSql("assigned");
             const result = await db.execute(sql`
               UPDATE orders
-              SET status      = 'assigned',
+              SET status      = ${grab.status},
+                  order_status = ${grab.order_status},
                   driver_id   = ${driver.id},
                   driver_accepted_at = NOW(),
                   assigned_method = 'grab',

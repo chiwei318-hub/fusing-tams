@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
+import { prepareStatusWriteSql } from "../lib/orderStatusEngine";
 
 export const jobsRouter = Router();
 
@@ -290,10 +291,11 @@ jobsRouter.post("/complete-task", async (req, res) => {
     }
 
     // Mark complete
+    const w = prepareStatusWriteSql("delivered");
     await pool.query(`
-      UPDATE orders SET fleet_completed_at = NOW(), status = 'delivered', updated_at = NOW()
+      UPDATE orders SET fleet_completed_at = NOW(), status = $3, order_status = $4, updated_at = NOW()
       WHERE id = $1 AND fleet_driver_id = $2
-    `, [orderId, driver.id]);
+    `, [orderId, driver.id, w.status, w.order_status]);
 
     res.json({ ok: true, order_id: orderId, driver_name: driver.name, completed_at: new Date().toISOString() });
   } catch (err) {

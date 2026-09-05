@@ -9,6 +9,7 @@ import {
   sendCustomerDispatch,
 } from "../lib/line.js";
 import { getDistanceKm } from "../lib/distanceService";
+import { prepareStatusWrite } from "../lib/orderStatusEngine";
 
 export const smartOrderRouter = Router();
 
@@ -607,8 +608,9 @@ async function assignDriver(
   const score = scoreDriver(driver, order, allOrders, cfg, pickupLoc);
 
   const now = new Date();
+  const w = prepareStatusWrite("assigned");
   await db.update(ordersTable).set({
-    driverId: driver.id, status: "assigned",
+    driverId: driver.id, status: w.status, orderStatus: w.orderStatus,
     autoDispatchedAt: now, updatedAt: now,
   } as any).where(eq(ordersTable.id, orderId));
 

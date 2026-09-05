@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
 import { writeAuditLog } from "./auditLog";
+import { prepareStatusWriteSql } from "../lib/orderStatusEngine";
 
 export const approvalsRouter = Router();
 
@@ -156,9 +157,10 @@ approvalsRouter.patch("/approvals/:id/approve", async (req, res) => {
 
       case "cancel_order":
         if (ar.order_id != null) {
+          const w = prepareStatusWriteSql("cancelled");
           await client.query(
-            `UPDATE orders SET status='cancelled', updated_at=NOW() WHERE id=$1`,
-            [ar.order_id]
+            `UPDATE orders SET status=$2, order_status=$3, updated_at=NOW() WHERE id=$1`,
+            [ar.order_id, w.status, w.order_status]
           );
           actionResult = { cancelled: true };
         }
@@ -166,9 +168,10 @@ approvalsRouter.patch("/approvals/:id/approve", async (req, res) => {
 
       case "reassign_driver":
         if (ar.order_id != null && payload.new_driver_id != null) {
+          const w = prepareStatusWriteSql("assigned");
           await client.query(
-            `UPDATE orders SET driver_id=$1, status='assigned', updated_at=NOW() WHERE id=$2`,
-            [payload.new_driver_id, ar.order_id]
+            `UPDATE orders SET driver_id=$1, status=$3, order_status=$4, updated_at=NOW() WHERE id=$2`,
+            [payload.new_driver_id, ar.order_id, w.status, w.order_status]
           );
           actionResult = { new_driver_id: payload.new_driver_id };
         }

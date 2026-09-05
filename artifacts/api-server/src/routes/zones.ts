@@ -8,6 +8,7 @@
  */
 import { Router } from "express";
 import { pool } from "@workspace/db";
+import { prepareStatusWriteSql } from "../lib/orderStatusEngine";
 
 export const zonesRouter = Router();
 
@@ -361,10 +362,11 @@ zonesRouter.post("/dispatch/assign", async (req, res) => {
     const prevDriverId = order.driver_id;
 
     // ── Assign driver ──────────────────────────────────────────────────────
+    const w = prepareStatusWriteSql("assigned");
     const { rows: updated } = await client.query(
-      `UPDATE orders SET driver_id=$1, status='assigned', updated_at=NOW()
+      `UPDATE orders SET driver_id=$1, status=$3, order_status=$4, updated_at=NOW()
        WHERE id=$2 RETURNING *`,
-      [Number(driver_id), Number(order_id)]
+      [Number(driver_id), Number(order_id), w.status, w.order_status]
     );
 
     // ── Audit log ──────────────────────────────────────────────────────────

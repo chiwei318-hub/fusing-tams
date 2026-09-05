@@ -12,6 +12,7 @@ import {
 import { eq, and, gte, lte, desc, sql, ne } from "drizzle-orm";
 import { createHash } from "crypto";
 import ExcelJS from "exceljs";
+import { prepareStatusWrite } from "../lib/orderStatusEngine";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -264,7 +265,11 @@ router.patch("/enterprise/:id/orders/:orderId/cancel", async (req, res) => {
     if (!order) return res.status(404).json({ error: "訂單不存在" });
     if (!["pending"].includes(order.status)) return res.status(400).json({ error: "此訂單已派車，無法取消" });
 
-    await db.update(ordersTable).set({ status: "cancelled" }).where(eq(ordersTable.id, orderId));
+    const cancelWrite = prepareStatusWrite("cancelled");
+    await db.update(ordersTable).set({
+      status: cancelWrite.status,
+      orderStatus: cancelWrite.orderStatus,
+    }).where(eq(ordersTable.id, orderId));
     await createNotification(id, orderId, "order_cancelled", "訂單已取消", `訂單 #${orderId} 已取消。`);
 
     res.json({ ok: true });

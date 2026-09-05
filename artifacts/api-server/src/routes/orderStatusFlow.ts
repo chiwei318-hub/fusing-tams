@@ -14,6 +14,13 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
 import { writeAuditLog } from "./auditLog";
+import {
+  VALID_TRANSITIONS,
+  assertCanonicalStatus,
+  assertTransition,
+  isCanonicalStatus,
+  prepareStatusWriteSql,
+} from "../lib/orderStatusEngine";
 
 export const orderStatusFlowRouter = Router();
 
@@ -67,17 +74,7 @@ async function ensureTables() {
 }
 ensureTables().catch(console.error);
 
-// ── Valid transitions ─────────────────────────────────────────────────────
-const VALID_TRANSITIONS: Record<string, string[]> = {
-  pending:    ["assigned", "cancelled"],
-  assigned:   ["arrived",  "cancelled", "exception"],
-  arrived:    ["loading",  "cancelled", "exception"],
-  loading:    ["in_transit","exception"],
-  in_transit: ["delivered","exception"],
-  delivered:  [],
-  exception:  ["assigned", "in_transit", "delivered"],
-  cancelled:  [],
-};
+// Transitions: orderStatusEngine.VALID_TRANSITIONS (P0-1 SSoT)
 
 // ── GET /api/orders/:id/status-history ────────────────────────────────────
 orderStatusFlowRouter.get("/orders/:id/status-history", async (req, res) => {
@@ -138,21 +135,28 @@ orderStatusFlowRouter.post("/orders/:id/status-event", async (req, res) => {
 
     switch (event) {
       case "arrive":
-        if (!["assigned", "pending"].includes(order.status))
+        // pending|assigned|accepted → arrived (compat: pending still allowed for legacy)
+        if (!["assigned", "accepted", "pending"].includes(order.status))
           throw new Error(`無效狀態轉換：${order.status} → arrived`);
+        if (order.status === "pending") {
+          // legacy shortcut; still assert target is canonical
+          assertCanonicalStatus("arrived");
+        } else {
+          assertTransition(order.status, "arrived");
+        }
         newStatus = "arrived";
         updates.arrived_at = now;
         break;
 
       case "start_loading":
-        if (order.status !== "arrived")
-          throw new Error(`無效狀態轉換：${order.status} → loading`);
+        assertTransition(order.status, "loading");
         newStatus = "loading";
         updates.loaded_at = now;
         break;
 
       case "exception": {
-        if (!VALID_TRANSITIONS[order.status]?.includes("exception"))
+        if (!isCanonicalStatus(order.status) ||
+            !VALID_TRANSITIONS[order.status].includes("exception"))
           throw new Error(`此狀態不可回報異常：${order.status}`);
         if (!exception_code || !EXCEPTION_CODES[exception_code])
           throw new Error("無效的異常原因碼");
@@ -181,8 +185,12 @@ orderStatusFlowRouter.post("/orders/:id/status-event", async (req, res) => {
         throw new Error("未知的事件類型");
     }
 
-    // Apply status change
-    if (newStatus) updates.status = newStatus;
+    // Apply status change + sync derived order_status (P0-1)
+    if (newStatus) {
+      const write = prepareStatusWriteSql(newStatus);
+      updates.status = write.status;
+      updates.order_status = write.order_status;
+    }
 
     // Build SET clause
     const setClauses = Object.keys(updates).map((k, i) => `${k} = $${i + 2}`);

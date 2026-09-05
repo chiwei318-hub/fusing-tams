@@ -28,6 +28,7 @@ import { broadcastWebhook } from "./webhooks.js";
 import { autoCalculateSettlement } from "./franchiseSettlements.js";
 import { ensureOrderFinanceColumns, calcOrderFinance } from "./orderFinanceColumns.js";
 import { syncOrderToLocationHistory } from "../lib/ensureLocationTables.js";
+import { prepareStatusWrite } from "../lib/orderStatusEngine.js";
 
 const router: IRouter = Router();
 
@@ -613,7 +614,7 @@ router.post("/orders", async (req, res) => {
 
         await db.update(ordersTable).set({
           driverId: chosen.id,
-          status: "assigned",
+          ...(() => { const w = prepareStatusWrite("assigned"); return { status: w.status, orderStatus: w.orderStatus }; })(),
           updatedAt: new Date(),
         }).where(eq(ordersTable.id, order.id));
 
@@ -691,12 +692,18 @@ router.put("/orders/:id/status", async (req, res) => {
       } catch (_) {}
     }
 
-    // ── status 合法性驗證 ─────────────────────────────────────
+    // ── status 合法性驗證（P0-1：canonical allowlist；driver 仍限 coarse 子集）──
     const allowed = jwtRole === "driver" ? DRIVER_ALLOWED : ADMIN_ALLOWED;
     if (!status || !(allowed as readonly string[]).includes(status)) {
       return res.status(400).json({
         error: `status 必須是：${allowed.join(" | ")}`,
       });
+    }
+    let statusWrite;
+    try {
+      statusWrite = prepareStatusWrite(status);
+    } catch (e) {
+      return res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
     }
 
     // ── 取得訂單 ─────────────────────────────────────────────
@@ -710,12 +717,13 @@ router.put("/orders/:id/status", async (req, res) => {
       }
     }
 
-    // ── 更新 ─────────────────────────────────────────────────
+    // ── 更新（雙寫 status + order_status）─────────────────────
     const updates: Record<string, any> = {
-      status,
+      status: statusWrite.status,
+      orderStatus: statusWrite.orderStatus,
       updatedAt: new Date(),
     };
-    if (status === "in_transit" && !order.driverAcceptedAt) {
+    if (statusWrite.status === "in_transit" && !order.driverAcceptedAt) {
       updates.driverAcceptedAt = new Date();
     }
 
@@ -724,12 +732,12 @@ router.put("/orders/:id/status", async (req, res) => {
     res.json(updated);
 
     // ── 完成後觸發（同 PATCH /orders/:id）────────────────────
-    if (status === "delivered" && updated?.id) {
+    if (statusWrite.status === "delivered" && updated?.id) {
       setImmediate(() => autoIssueInvoice(updated.id, "admin_delivered").catch(() => {}));
       setImmediate(() => autoCalculateSettlement(updated.id).catch(() => {}));
     }
 
-    if (["in_transit", "delivered", "assigned"].includes(status) && updated) {
+    if (["in_transit", "delivered", "assigned"].includes(statusWrite.status) && updated) {
       setImmediate(async () => {
         try {
           const customerRows = await db.select().from(customersTable)
@@ -741,11 +749,11 @@ router.put("/orders/:id/status", async (req, res) => {
               in_transit: { title: "貨物運送中", message: `訂單 #${updated.id} 的貨物正在運送中，預計即將抵達。` },
               delivered:  { title: "訂單已完成", message: `訂單 #${updated.id} 已完成交付，感謝您使用富詠運輸！` },
             };
-            const notif = notifMap[status];
+            const notif = notifMap[statusWrite.status];
             if (notif) {
               await db.insert(customerNotificationsTable).values({
                 customerId: customer.id, orderId: updated.id,
-                type: `order_${status}`, ...notif,
+                type: `order_${statusWrite.status}`, ...notif,
               });
             }
           }
@@ -767,11 +775,23 @@ router.patch("/orders/:id", async (req, res) => {
     if (!existing.length) return res.status(404).json({ error: "Order not found" });
 
     const updates: Partial<typeof ordersTable.$inferInsert> = { updatedAt: new Date() };
-    if (body.status !== undefined) updates.status = body.status;
+    if (body.status !== undefined) {
+      try {
+        const w = prepareStatusWrite(body.status);
+        updates.status = w.status;
+        updates.orderStatus = w.orderStatus;
+      } catch (e) {
+        return res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+      }
+    }
     if (body.notes !== undefined) updates.notes = body.notes ?? null;
     if (body.driverId !== undefined) {
       updates.driverId = body.driverId ?? null;
-      if (body.driverId && body.status === undefined) updates.status = "assigned";
+      if (body.driverId && body.status === undefined) {
+        const w = prepareStatusWrite("assigned");
+        updates.status = w.status;
+        updates.orderStatus = w.orderStatus;
+      }
     }
     if (body.basePrice !== undefined) updates.basePrice = body.basePrice ?? null;
     if (body.extraFee !== undefined) updates.extraFee = body.extraFee ?? null;
@@ -963,16 +983,24 @@ router.post("/orders/:id/driver-action", async (req, res) => {
 
     if (body.action === "accept") {
       updates.driverAcceptedAt = now;
-      updates.status = "assigned";
+      const w = prepareStatusWrite("assigned");
+      updates.status = w.status;
+      updates.orderStatus = w.orderStatus;
     } else if (body.action === "reject") {
       updates.driverId = null;
-      updates.status = "pending";
+      const w = prepareStatusWrite("pending");
+      updates.status = w.status;
+      updates.orderStatus = w.orderStatus;
     } else if (body.action === "checkin") {
       updates.checkInAt = now;
-      updates.status = "in_transit";
+      const w = prepareStatusWrite("in_transit");
+      updates.status = w.status;
+      updates.orderStatus = w.orderStatus;
     } else if (body.action === "complete") {
       updates.completedAt = now;
-      updates.status = "delivered";
+      const w = prepareStatusWrite("delivered");
+      updates.status = w.status;
+      updates.orderStatus = w.orderStatus;
       if (body.signaturePhotoUrl) updates.signaturePhotoUrl = body.signaturePhotoUrl;
       if (body.completionNote) updates.notes = body.completionNote;
     }

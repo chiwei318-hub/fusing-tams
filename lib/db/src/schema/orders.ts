@@ -3,7 +3,18 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { driversTable } from "./drivers";
 
-export const orderStatusEnum = ["pending", "assigned", "in_transit", "delivered", "cancelled"] as const;
+/** P0-1 canonical orders.status allowlist (OpenAPI coarse is a subset). */
+export const orderStatusEnum = [
+  "pending",
+  "assigned",
+  "accepted",
+  "arrived",
+  "loading",
+  "in_transit",
+  "delivered",
+  "exception",
+  "cancelled",
+] as const;
 export type OrderStatus = typeof orderStatusEnum[number];
 
 /** TMS 生命週期狀態（比 status 更細粒度） */

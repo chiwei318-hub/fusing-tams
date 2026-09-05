@@ -43,6 +43,7 @@ import { createHash, randomBytes } from "crypto";
 import { requireFleetOwner } from "../middleware/fleetAuth";
 import ExcelJS from "exceljs";
 import { runFleetSheetSync } from "../lib/fleetSheetSync";
+import { prepareStatusWriteSql } from "../lib/orderStatusEngine";
 
 export const fleetOwnerRouter = Router();
 
@@ -331,11 +332,12 @@ fleetOwnerRouter.post("/orders/:orderId/assign", async (req, res) => {
     return res.status(400).json({ error: "司機不存在、不屬於本車行，或目前不在線" });
   }
 
+  const w = prepareStatusWriteSql("assigned");
   const { rows } = await pool.query(
-    `UPDATE orders SET driver_id=$1, status='assigned', updated_at=NOW()
+    `UPDATE orders SET driver_id=$1, status=$3, order_status=$4, updated_at=NOW()
      WHERE id=$2 AND (driver_id IS NULL OR driver_id=$1)
-     RETURNING id, status, driver_id`,
-    [driver_id, orderId]
+     RETURNING id, status, order_status, driver_id`,
+    [driver_id, orderId, w.status, w.order_status]
   );
   if (!rows[0]) return res.status(409).json({ error: "訂單已被指派或不存在" });
 

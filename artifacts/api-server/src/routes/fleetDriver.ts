@@ -32,6 +32,7 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
 import { requireFleetDriver } from "../middleware/fleetAuth";
+import { prepareStatusWriteSql } from "../lib/orderStatusEngine";
 
 export const fleetDriverRouter = Router();
 
@@ -123,12 +124,13 @@ fleetDriverRouter.get("/orders", async (req, res) => {
 fleetDriverRouter.post("/orders/:id/accept", async (req, res) => {
   const { driver_id } = req.fleet!;
   const orderId = Number(req.params.id);
+  const write = prepareStatusWriteSql("accepted");
 
   const { rows } = await pool.query(
-    `UPDATE orders SET status='accepted', updated_at=NOW()
+    `UPDATE orders SET status=$3, order_status=$4, updated_at=NOW()
      WHERE id=$1 AND driver_id=$2 AND status='assigned'
-     RETURNING id, status`,
-    [orderId, driver_id]
+     RETURNING id, status, order_status`,
+    [orderId, driver_id, write.status, write.order_status]
   );
   if (!rows[0]) return res.status(404).json({ error: "訂單不存在或已處理" });
   res.json({ ok: true, order: rows[0] });
@@ -137,12 +139,13 @@ fleetDriverRouter.post("/orders/:id/accept", async (req, res) => {
 fleetDriverRouter.post("/orders/:id/start", async (req, res) => {
   const { driver_id } = req.fleet!;
   const orderId = Number(req.params.id);
+  const write = prepareStatusWriteSql("in_transit");
 
   const { rows } = await pool.query(
-    `UPDATE orders SET status='in_transit', updated_at=NOW()
+    `UPDATE orders SET status=$3, order_status=$4, updated_at=NOW()
      WHERE id=$1 AND driver_id=$2 AND status IN ('assigned','accepted')
-     RETURNING id, status`,
-    [orderId, driver_id]
+     RETURNING id, status, order_status`,
+    [orderId, driver_id, write.status, write.order_status]
   );
   if (!rows[0]) return res.status(404).json({ error: "訂單不存在或狀態不符" });
 
@@ -156,17 +159,19 @@ fleetDriverRouter.post("/orders/:id/start", async (req, res) => {
 fleetDriverRouter.post("/orders/:id/complete", async (req, res) => {
   const { driver_id } = req.fleet!;
   const orderId = Number(req.params.id);
-  const { photo_url, signature_url, notes } = req.body ?? {};
+  const { photo_url: _photo_url, signature_url: _signature_url, notes } = req.body ?? {};
+  const write = prepareStatusWriteSql("delivered");
 
   const { rows } = await pool.query(
     `UPDATE orders SET
-       status='delivered',
+       status=$4,
+       order_status=$5,
        actual_delivery_at=NOW(),
        delivery_notes=$1,
        updated_at=NOW()
      WHERE id=$2 AND driver_id=$3 AND status='in_transit'
-     RETURNING id, status`,
-    [notes ?? null, orderId, driver_id]
+     RETURNING id, status, order_status`,
+    [notes ?? null, orderId, driver_id, write.status, write.order_status]
   );
   if (!rows[0]) return res.status(404).json({ error: "訂單不存在或狀態不符" });
 
