@@ -10,6 +10,32 @@ const { Pool } = pg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function resolveMigrationsFolder(): string {
+  if (process.env.DRIZZLE_MIGRATIONS_PATH) {
+    return process.env.DRIZZLE_MIGRATIONS_PATH;
+  }
+
+  // When bundled into artifacts/api-server/dist, __dirname is no longer lib/db/src.
+  // Try common locations (Docker, monorepo root cwd, api-server cwd, source layout).
+  const candidates = [
+    "/app/lib/db/drizzle",
+    path.join(process.cwd(), "lib/db/drizzle"),
+    path.join(process.cwd(), "../../lib/db/drizzle"),
+    path.join(__dirname, "../drizzle"),
+    path.join(__dirname, "../../../lib/db/drizzle"),
+    path.join(__dirname, "../../../../lib/db/drizzle"),
+  ];
+
+  for (const folder of candidates) {
+    const journal = path.join(folder, "meta", "_journal.json");
+    if (existsSync(journal)) return path.resolve(folder);
+  }
+
+  throw new Error(
+    `Can't find drizzle migrations (meta/_journal.json). Tried:\n- ${candidates.join("\n- ")}\nSet DRIZZLE_MIGRATIONS_PATH to the absolute path of lib/db/drizzle.`,
+  );
+}
+
 /**
  * Runs Drizzle migrations from the drizzle/ folder.
  *
@@ -28,12 +54,7 @@ export async function runMigrations(): Promise<void> {
 
   try {
     const db = drizzle(pool);
-
-    // Docker (WORKDIR /app): /app/lib/db/drizzle. Local dev: ../drizzle from this file. Override: DRIZZLE_MIGRATIONS_PATH.
-    const defaultFolder = existsSync("/app/lib/db/drizzle")
-      ? "/app/lib/db/drizzle"
-      : path.join(__dirname, "../drizzle");
-    const migrationsFolder = process.env.DRIZZLE_MIGRATIONS_PATH || defaultFolder;
+    const migrationsFolder = resolveMigrationsFolder();
 
     console.log("[migrate] Running Drizzle migrations from", migrationsFolder);
     await migrate(db, { migrationsFolder });
