@@ -21,12 +21,12 @@
 | 5 | **VAT_AMOUNT_DRIZZLE_SCHEMA_GAP** | **OPEN GO-LIVE GATE P1** | DB VAT OK; API/UI transport gap — see GO-LIVE-GATE.md | **HIGH BEFORE GO-LIVE** |
 | 6 | **RATE_INTAKE_PATH_GAP** | **OPEN GO-LIVE GATE P0** | Cost/GP formula OK; normal create cannot supply rate-match input — see GO-LIVE-GATE.md | **HIGH BEFORE GO-LIVE** |
 | 7 | **COST_ENGINE_NORMAL_PATH_COVERAGE_GAP** | **OPEN GO-LIVE GATE P0** | Normal UI intake→cost coverage unproven; NULL unknown OK — no fake fallbacks — see GO-LIVE-GATE.md | **HIGH BEFORE GO-LIVE** |
-| 8 | **PRICING_CONFIG_MISSING** | **OPEN GO-LIVE GATE P0**; **IMPL NOT AUTHORIZED** | LOCAL: settlement calculate needs `pricing_config`; missing → path blocked — see GO-LIVE-GATE.md | **HIGH BEFORE GO-LIVE** |
-| 9 | **ORDER_SETTLEMENTS_SCHEMA_GAP** | **OPEN GO-LIVE GATE P0**; **IMPL NOT AUTHORIZED** | LOCAL: missing writer cols + **sub-gap** `ORDER_SETTLEMENTS_ORDER_ID_UNIQUE_GAP` (no UNIQUE(order_id); ON CONFLICT would fail) — prod UNKNOWN — see GO-LIVE-GATE.md | **HIGH BEFORE GO-LIVE** |
-| 9a | **ORDER_SETTLEMENTS_ORDER_ID_UNIQUE_GAP** | Sub-gap of #9; **CONFIRMED LOCAL** (not a new Gate #) | PK on id only; no UNIQUE(order_id); preflight duplicates before any UNIQUE migrate | **HIGH BEFORE GO-LIVE** |
-| 10 | **ORDERS_DRIVER_NAME_MISSING** | **OPEN GO-LIVE GATE P0** | LOCAL: `calcFinancials` reads `orders.driver_name` but column absent — see GO-LIVE-GATE.md | **HIGH BEFORE GO-LIVE** |
+| 8 | **PRICING_CONFIG_MISSING** | **OPEN GO-LIVE GATE P0**; LOCAL committed `102f59e` | LOCAL structure repaired; Production schema **UNKNOWN** — see GO-LIVE-GATE.md | **HIGH BEFORE GO-LIVE** |
+| 9 | **ORDER_SETTLEMENTS_SCHEMA_GAP** | **OPEN GO-LIVE GATE P0**; LOCAL committed `102f59e` | LOCAL cols+UNIQUE repaired; Production **UNKNOWN**; sub-gap #9a — see GO-LIVE-GATE.md | **HIGH BEFORE GO-LIVE** |
+| 9a | **ORDER_SETTLEMENTS_ORDER_ID_UNIQUE_GAP** | Sub-gap of #9; **LOCAL repaired** (not a new Gate #) | UNIQUE(order_id) applied locally via `0003`; Production UNIQUE state **UNKNOWN** | **HIGH BEFORE GO-LIVE** |
+| 10 | **ORDERS_DRIVER_NAME_MISSING** | **CLOSED LOCAL** (STALE_READER→join `drivers.name`) | No schema ADD; calcFinancials join only — see GO-LIVE-GATE.md | CLOSED LOCAL; prod **UNKNOWN** |
 | 11 | **UI_COST_PROFIT_DISPLAY_GAP** | Open BACKLOG ONLY | API returns cost/profit; Admin list/detail show fee only | Medium |
-| U | **ENVIRONMENT_INITIALIZATION_PARITY_NOT_PROVEN** | OPEN umbrella; Audit DONE; **#8/#9 plan content OK; IMPL NOT AUTHORIZED** | Init SSoT=Drizzle-only; fold 002; CREATE pricing_config; #9 also needs UNIQUE(order_id) after dup preflight — see GO-LIVE-GATE.md | **AUDIT / DEPLOYMENT READINESS** |
+| U | **ENVIRONMENT_INITIALIZATION_PARITY_NOT_PROVEN** | OPEN umbrella; Audit DONE; #8/#9 LOCAL committed | Init SSoT=Drizzle-only; Production parity still NOT_PROVEN — see GO-LIVE-GATE.md | **AUDIT / DEPLOYMENT READINESS** |
 
 #4 evidence: `enterprise.ts` single + bulk inserts use `prepareStatusWrite("pending")`; test `tests/characterization/status/enterprise-create.test.mjs`.
 
@@ -41,21 +41,22 @@ Canonical registry: [`GO-LIVE-GATE.md`](./GO-LIVE-GATE.md)
 | #5 | VAT_AMOUNT_DRIZZLE_SCHEMA_GAP | P1 | OPEN — blocker | (prior) |
 | #6 | RATE_INTAKE_PATH_GAP | P0 | OPEN — blocker | (prior) |
 | #7 | COST_ENGINE_NORMAL_PATH_COVERAGE_GAP | P0 | OPEN — blocker | (prior) |
-| #8 | PRICING_CONFIG_MISSING | P0 | OPEN — blocker; **IMPL NOT AUTHORIZED** | **LOCAL only**; prod schema **UNKNOWN** |
-| #9 | ORDER_SETTLEMENTS_SCHEMA_GAP | P0 | OPEN — blocker; **IMPL NOT AUTHORIZED** | **LOCAL only**; prod schema **UNKNOWN**; sub-gap UNIQUE(order_id) **CONFIRMED LOCAL** |
-| #9a | ORDER_SETTLEMENTS_ORDER_ID_UNIQUE_GAP | (under #9) | CONFIRMED LOCAL — not a new Gate # | Production UNIQUE state **UNKNOWN** |
-| #10 | ORDERS_DRIVER_NAME_MISSING | P0 | OPEN — blocker | **LOCAL only**; prod schema **UNKNOWN** |
+| #8 | PRICING_CONFIG_MISSING | P0 | OPEN — blocker; LOCAL committed `102f59e` | **LOCAL only**; prod schema **UNKNOWN** |
+| #9 | ORDER_SETTLEMENTS_SCHEMA_GAP | P0 | OPEN — blocker; LOCAL committed `102f59e` | **LOCAL only**; prod schema **UNKNOWN**; UNIQUE(order_id) LOCAL |
+| #9a | ORDER_SETTLEMENTS_ORDER_ID_UNIQUE_GAP | (under #9) | LOCAL repaired — not a new Gate # | Production UNIQUE state **UNKNOWN** |
+| #10 | ORDERS_DRIVER_NAME_MISSING | P0 | **CLOSED LOCAL** | **LOCAL only**; prod schema **UNKNOWN** |
 
 Evidence aliases under #6: former `ADMIN_UI_NO_ROUTE_PREFIX_FIELD`, `ROUTE_IMPORT_SOURCE_COLUMN_GAP`.
 
 Umbrella (not counted as 7th HIGH gate): `ENVIRONMENT_INITIALIZATION_PARITY_NOT_PROVEN` — Fresh Init Audit **DONE**; INIT_PARITY still **NOT_PROVEN**.
 
 ```text
-#8 IMPLEMENTATION = NOT CURRENTLY AUTHORIZED
-#9 IMPLEMENTATION = NOT CURRENTLY AUTHORIZED
+#8 LOCAL_IMPL = COMMITTED (102f59e) — GO-LIVE OPEN (Production UNKNOWN)
+#9 LOCAL_IMPL = COMMITTED (102f59e) — GO-LIVE OPEN (Production UNKNOWN)
+#10 = CLOSED LOCAL
 ```
 
-Do **not** auto-start TEST #4. Await new explicit implement authorization before schema/migration work.
+Do **not** auto-start TEST #4. Await explicit reopen.
 
 ### Runtime TEST status (locked)
 
@@ -64,8 +65,9 @@ Do **not** auto-start TEST #4. Await new explicit implement authorization before
 | #1 TAX | PASS |
 | #2 COST / GP | PASS |
 | #3 AP static logic | **VERIFIED** |
-| #3 AP runtime E2E | **BLOCKED — RUNTIME / SCHEMA PATH** (not PASS, not FORMULA FAIL) |
+| #3 AP runtime E2E | **PASS LOCAL** (CASE A AP=8500 / profit=1500; CASE B NULL; no ×80/×15) |
 
-**PRODUCTION_READY = NO** while any of #5–#10 OPEN.  
-**TOTAL OPEN HIGH GO-LIVE GATES = 6**  
-Runtime formula PASS / static AP verify ≠ production ready. Do not repair #8/#9/#10 mid-suite; do not start TEST #4 without reopen.
+**PRODUCTION_READY = NO** while any of #5–#9 OPEN.  
+**TOTAL OPEN HIGH GO-LIVE GATES = 5** (#5–#9)  
+**#10 = CLOSED LOCAL**  
+Runtime formula PASS ≠ production ready. Do not start TEST #4 without reopen.

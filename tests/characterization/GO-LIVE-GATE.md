@@ -2,8 +2,8 @@
 
 **STATUS: LOCKED**  
 **LOCKED_AT:** 2026-09-06 (post Runtime TEST #1 TAX / TEST #2 COST-GP)  
-**UPDATED_AT:** 2026-09-06 (post Runtime TEST #3 AP — GATE #8/#9/#10 registry)  
-**ACTION THIS ROUND:** Documentation / evidence lock only — no code / schema / DB / formula repair.
+**UPDATED_AT:** 2026-09-06 (post #10 CLOSED LOCAL + TEST #3 PASS LOCAL; retroactive auth)  
+**ACTION THIS ROUND:** #10 READER_JOIN_FIX committed; docs corrected; Production still UNKNOWN.
 
 ## Interpretation rule
 
@@ -15,27 +15,27 @@ They do **not** mean:
 
 > **SYSTEM READY FOR PRODUCTION**
 
-While any of GATE #5 / #6 / #7 / #8 / #9 / #10 remains OPEN:
+While any of GATE #5 / #6 / #7 / #8 / #9 remains OPEN:
 
 > **PRODUCTION_READY = NO**
 
 Especially while #6 / #7 are OPEN: do **not** claim “系統會自動依費率計算所有訂單成本”.  
 Correct statement: “成本/毛利公式已驗證；正常 intake → rate matching coverage 尚未完成上線驗收。”
 
-Especially while #8 / #9 / #10 are OPEN: do **not** claim “AP / platform_profit 已端到端驗證可上線”.  
-Correct statement: “AP 靜態邏輯已審；LOCAL settlement runtime path 不完整，端到端 runtime 尚未 PASS。”
+Especially while #8 / #9 remain OPEN (Production schema UNKNOWN): do **not** claim “AP / platform_profit 已端到端驗證可上線”.  
+Correct statement: “LOCAL TEST #3 AP runtime PASS；#8/#9 Production schema parity 未證明；Production = UNKNOWN。”
 
 ### Evidence boundary (TEST #3)
 
 本輪證明的是：
 
-> **LOCAL TEST ENVIRONMENT** 的 settlement runtime contract / path 不完整。
+> **LOCAL TEST ENVIRONMENT** 的 AP / platform_profit runtime path 已 PASS（settlement → recalc）。
 
 **不得**寫成：
 
-- Production DB 已缺欄位  
-- Production settlement 已壞  
-- Production data 已受污染  
+- Production DB schema 已與 LOCAL 一致  
+- Production settlement / AP 已驗證可上線  
+- PRODUCTION_READY = YES  
 
 **PRODUCTION ENVIRONMENT STATE = UNKNOWN**（不得升級為確定壞、也不得降級為確定好）。
 
@@ -113,16 +113,16 @@ At least:
 ID = PRICING_CONFIG_MISSING
 TYPE = REPAIR / INITIALIZATION GAP
 SEVERITY = HIGH BEFORE GO-LIVE (P0)
-STATUS = OPEN — GO-LIVE BLOCKER (LOCAL structure repaired 2026-09-06; Production UNKNOWN)
+STATUS = OPEN — GO-LIVE BLOCKER (LOCAL structure repaired + committed `102f59e`; Production UNKNOWN)
 EVIDENCE SCOPE = LOCAL TEST ENVIRONMENT ONLY
 PRODUCTION SCHEMA STATE = UNKNOWN
-LOCAL_IMPL = APPLIED (await human review / commit)
+LOCAL_IMPL = COMMITTED (`102f59e`)
 ```
 
 **PROVEN (TEST #3, LOCAL):**
 - Normal settlement calculate path (`POST /api/franchise-settlements/calculate/:orderId`) reads `pricing_config` (`default_commission_rate`, `insurance_rate`, `other_fee_rate`, `other_fee_fixed`)
-- LOCAL runtime: relation `pricing_config` missing → calculate returns 500 at rate-load stage
-- Therefore formal settlement business flow cannot complete on LOCAL → AP runtime E2E blocked
+- Pre-repair LOCAL: relation `pricing_config` missing → calculate returned 500 at rate-load stage
+- Post-repair LOCAL: CREATE via Drizzle `0002`; calculate unblocked when rates supplied / keys present
 
 **IMPACT:** Cannot complete settlement → cannot end-to-end verify AP / platform_profit at runtime.
 
@@ -138,14 +138,14 @@ LOCAL_IMPL = APPLIED (await human review / commit)
 ID = ORDER_SETTLEMENTS_SCHEMA_GAP
 TYPE = REPAIR / SCHEMA CONTRACT GAP
 SEVERITY = HIGH BEFORE GO-LIVE (P0)
-STATUS = OPEN — GO-LIVE BLOCKER (LOCAL columns+UNIQUE repaired 2026-09-06; Production UNKNOWN)
+STATUS = OPEN — GO-LIVE BLOCKER (LOCAL columns+UNIQUE repaired + committed `102f59e`; Production UNKNOWN)
 EVIDENCE SCOPE = LOCAL TEST ENVIRONMENT ONLY
 PRODUCTION SCHEMA STATE = UNKNOWN
-LOCAL_IMPL = APPLIED (await human review / commit)
+LOCAL_IMPL = COMMITTED (`102f59e`)
 ```
 
 **PROVEN (TEST #3, LOCAL):**
-- Settlement writer (`franchiseSettlements.ts` calculate INSERT) expects columns that LOCAL `order_settlements` did **not** present on `\d order_settlements` inspection.
+- Settlement writer (`franchiseSettlements.ts` calculate INSERT) expected columns that pre-repair LOCAL `order_settlements` did **not** present on `\d order_settlements` inspection.
 - Writer INSERT list (code contract):  
   `insurance_rate`, `insurance_fee`, `other_fee_rate`, `other_handling_fee`,  
   `franchisee_id`, `franchisee_payout`, `franchisee_payment_status`
@@ -215,24 +215,29 @@ canonical schema definition
 
 ```text
 ID = ORDERS_DRIVER_NAME_MISSING
-TYPE = REPAIR / SCHEMA CONTRACT GAP
+TYPE = REPAIR / SCHEMA CONTRACT GAP → classified STALE_READER
 SEVERITY = HIGH BEFORE GO-LIVE (P0)
-STATUS = OPEN — GO-LIVE BLOCKER
+STATUS = CLOSED LOCAL (2026-09-06; retroactive authorization)
 EVIDENCE SCOPE = LOCAL TEST ENVIRONMENT ONLY
 PRODUCTION SCHEMA STATE = UNKNOWN
+CLASSIFICATION = A. STALE_READER / READER_JOIN_FIX
 ```
 
 **PROVEN (TEST #3, LOCAL):**
-- `calcFinancials` / `POST /api/financials/recalculate/:orderId` selects `o.driver_name` from `orders`
-- LOCAL `orders` schema: `driver_name` **not** present → recalculate returns 500 (`column o.driver_name does not exist`)
-- Orders #5 / #6: fee quoted OK; financials row not written via recalc path
+- `calcFinancials` / `POST /api/financials/recalculate/:orderId` previously selected `o.driver_name` from `orders`
+- LOCAL `orders` schema: `driver_name` **not** present → recalculate returned 500 (`column o.driver_name does not exist`)
 
-**GO-LIVE CONDITION:** First confirm SSoT ownership:
+**REPAIR (LOCAL, no schema):**
+- Canonical FK = `orders.driver_id` → `drivers.id`
+- Canonical display name = `drivers.name`
+- `calcFinancials` now: `LEFT JOIN drivers d ON d.id = o.driver_id` → `d.name AS driver_name`
+- No ADD COLUMN; no migration; AP formula unchanged
+- Runtime: CASE A order#5 ap_total=8500 platform_profit=1500; CASE B order#6 ap/platform_profit NULL
+- Characterization: 106/106 PASS; TEST #1/#2 unchanged
 
-- Is `driver_name` a canonical `orders` column?  
-- Or is the code reader using a wrong / stale field (e.g. should join `drivers.name`)?
+**CLOSURE:** Retroactively authorized after forensic review (reader-only, clean uncommitted diff, no schema impact). Production still UNKNOWN.
 
-**FORBIDDEN:** Blindly ADD COLUMN to close the gate; skip ownership decision (REPAIR / MODIFY / DELETE / migration).
+**FORBIDDEN:** Blindly ADD COLUMN; skip ownership decision.
 
 ---
 
@@ -273,7 +278,7 @@ NOT COUNTED AS separate HIGH GO-LIVE GATE #
 |------|------------------------|-------|
 | #8 | **YES (same family)** | No CREATE + 002 never auto-run |
 | #9 | **YES (same family)** | 002 orphan; Drizzle schema/`settlements.ts` also omit writer cols |
-| #10 | **PARTIAL / different** | `orders.driver_name` absent from Drizzle **and** LOCAL; `calcFinancials` stale denorm read — prefer join `drivers.name`, **not** blind ADD COLUMN |
+| #10 | **CLOSED LOCAL** (stale reader) | Was stale denorm `o.driver_name`; fixed via join `drivers.name` — **not** ADD COLUMN |
 | #5 | **PARTIAL** | LOCAL has `vat_amount` via runtime ALTER; Drizzle `orders.ts` omits it → transport/SSoT drift |
 | #6 / #7 | **NO (not init)** | `route_prefix` + `route_prefix_rates` **exist** LOCAL; QuickOrder UI does not supply prefix — **application intake** gap |
 
@@ -282,95 +287,36 @@ NOT COUNTED AS separate HIGH GO-LIVE GATE #
 1. **Formal initialization / migration contract** (closes path for #8/#9; also documents `pricing_config` CREATE + fold or replace orphan `002`)  
 2. **Stale code reader SSoT** for #10 (`driver_name` ownership) — and separately intake work for #6/#7  
 
-**Why defer TEST #4 remains correct:** AP path still blocked by #8/#9/#10; init parity NOT_PROVEN → later money tests likely hit more missing contracts before formulas.
+**Why defer TEST #4 remains correct:** LOCAL AP (#3) PASS; #8/#9 still OPEN for Production schema parity; init parity NOT_PROVEN; #5/#6/#7 still OPEN → do not start TEST #4 without explicit reopen.
 
 **FORBIDDEN still:** runtime ALTER to close gates; hand-seed for PASS; claim Production schema broken.
 
-### #8/#9 INIT CONTRACT REPAIR PLAN — CONTENT APPROVED; IMPLEMENTATION NOT AUTHORIZED (2026-09-06)
+### #8/#9 INIT CONTRACT — LOCAL IMPLEMENTED + COMMITTED (`102f59e`)
 
-**MODE:** Plan content/direction approved. **No implement.** No migration created/run. No DDL. No code change.
+**HISTORICAL:** Plan was content-approved first; implement later authorized separately. Do **not** re-read stale “IMPLEMENTATION = NOT AUTHORIZED” as current state.
 
 ```text
-#8 IMPLEMENTATION = NOT CURRENTLY AUTHORIZED
-#9 IMPLEMENTATION = NOT CURRENTLY AUTHORIZED
-Await new explicit implement authorization.
-
-DECISION_SSOT_INIT_ENTRY = DRIZZLE_MIGRATE_ONLY
-  (API start already calls runMigrations(); reject long-term hybrid)
-  ensure* may remain for legacy ad-hoc tables, but MUST NOT be the
-  create-path for pricing_config or order_settlements franchise cols.
-  Orphan artifacts/api-server/migrations/*.sql MUST NOT stay a second SSoT.
-
-PRICING_CONFIG_PLAN (#8):
-  - CREATE TABLE pricing_config in next formal Drizzle migration
-    (repo today: zero CREATE — only INSERT/SELECT)
-  - Minimal columns (from existing writers/readers): id, key, value, label, updated_at
-    + UNIQUE(key) for ON CONFLICT (key)
-  - Seed keys (idempotent ON CONFLICT DO NOTHING):
-      default_commission_rate  (002 omitted this; getRates defaults 15 but key should exist)
-      insurance_rate
-      other_fee_rate
-      other_fee_fixed
-  - Add Drizzle schema module for pricing_config (today MISSING)
-  - Other keys (vehicle_rate_cards, smtp_*, etc.): OUT OF SCOPE create;
-    table existence unblocks them; do not expand seed set in #8/#9 repair
-
-ORDER_SETTLEMENTS_PLAN (#9):
-  REQUIRED for franchiseSettlements calculate/autoCalculate INSERT:
-    insurance_rate, insurance_fee, other_fee_rate, other_handling_fee,
-    franchisee_id, franchisee_payout, franchisee_payment_status
-  OPTIONAL for calculate writer, but REQUIRED for adjacent settlement features
-  (include in same migration for 002 parity — do not leave half-applied):
-    franchisee_paid_at, franchisee_payment_ref, atoms_pushed_at
-  + indexes from 002 (franchisee_id, franchisee_payment_status)
-  LATENT → CONFIRMED LOCAL (sub-gap ORDER_SETTLEMENTS_ORDER_ID_UNIQUE_GAP):
-    writer uses ON CONFLICT (order_id); LOCAL has no UNIQUE(order_id)
-    — PRODUCTION still UNKNOWN; UNIQUE migration forbidden until duplicate preflight
-
-ORPHAN_002_DISPOSITION = FOLD_INTO_DRIZZLE_THEN_SUPERSEDE
-  - Translate 002 into Drizzle schema + generated migration (after CREATE pricing_config)
-  - Mark 002 file SUPERSEDED (header comment only in implement phase);
-    do NOT keep dual auto-apply
-  - ROLLBACK idea: additive columns → reverse = documented DROP COLUMN script
-    ONLY on empty/dev DBs; on data-bearing DBs = feature-off + no drop
-    (no silent destructive rollback)
-
-DRIZZLE_SCHEMA_SYNC = YES_REQUIRED
-  - Update lib/db/src/schema/settlements.ts to match writer
-  - Add pricing_config schema; generate migrate; journal single path
-
-FRESH_ENV_ACCEPTANCE_SCRIPT = NOT EXECUTED (design only):
-  1. Empty DB + DATABASE_URL
-  2. Start API with SKIP_DB_MIGRATE unset → runMigrations only
-  3. Assert to_regclass('pricing_config') not null + 4 seed keys present
-  4. Assert order_settlements has REQUIRED (+ OPTIONAL) cols above
-  5. POST calculate on a fixture order → 200 (not 500 on missing relation/col)
-  6. Do NOT use runtime ALTER; do NOT hand INSERT pricing_config outside migrate
-  Gate close condition: steps 1–5 reproducible on fresh env (still LOCAL≠Production)
-
-OUT_OF_SCOPE: #5 #6 #7 #10 (and UI_COST #11)
-RECOMMENDED_IMPLEMENTATION_ORDER (after explicit approve):
-  1) pricing_config schema+CREATE+seed
-  2) settlements cols + unique(order_id) if needed + schema sync
-  3) supersede 002
-  4) fresh-env acceptance (dev) → then re-open TEST #3 runtime only
-STILL_DEFER_TEST_4 = YES — #8/#9/#10 still OPEN; AP path not E2E
+#8 LOCAL_IMPL = COMMITTED (102f59e) — GO-LIVE still OPEN (Production UNKNOWN)
+#9 LOCAL_IMPL = COMMITTED (102f59e) — GO-LIVE still OPEN (Production UNKNOWN)
+#10 = CLOSED LOCAL (READER_JOIN_FIX; this commit) — Production UNKNOWN
+DECISION_SSOT_INIT_ENTRY = DRIZZLE_MIGRATE_ONLY (as applied)
 PRODUCTION_STATE = UNKNOWN
+STILL_DEFER_TEST_4 = YES — #5/#6/#7/#8/#9 OPEN; PRODUCTION_READY = NO
 ```
-
-**Await human approve before any implement phase.**
 
 ---
 
 ## Authorization lock (current)
 
 ```text
-#8/#9 LOCAL minimal repair = APPLIED (uncommitted; human review)
-COMMIT = NO
+#8/#9 LOCAL = COMMITTED (102f59e); GO-LIVE OPEN (Production UNKNOWN)
+#10 = CLOSED LOCAL (retroactive auth + this commit)
+TEST #3 RUNTIME = PASS LOCAL
+COMMIT = THIS ROUND (#10 only)
 PUSH = NO
 DEPLOY = NO
 PRODUCTION = UNKNOWN
-TEST #3 RUNTIME = BLOCKED BY GATE #10 (orders.driver_name)
+PRODUCTION_READY = NO
 ```
 
 ---
@@ -381,10 +327,10 @@ TEST #3 RUNTIME = BLOCKED BY GATE #10 (orders.driver_name)
 |----------|------|-----|
 | **P0** | #6 RATE_INTAKE_PATH_GAP | Formula OK but engine often unreachable |
 | **P0** | #7 COST_ENGINE_NORMAL_PATH_COVERAGE_GAP | Coverage of normal path unproven |
-| **P0** | #8 PRICING_CONFIG_MISSING | LOCAL settlement calculate blocked at config load |
-| **P0** | #9 ORDER_SETTLEMENTS_SCHEMA_GAP | LOCAL settlements schema ≠ writer contract |
-| **P0** | #10 ORDERS_DRIVER_NAME_MISSING | LOCAL recalc blocked on `orders.driver_name` |
+| **P0** | #8 PRICING_CONFIG_MISSING | LOCAL repaired; Production schema parity UNKNOWN |
+| **P0** | #9 ORDER_SETTLEMENTS_SCHEMA_GAP | LOCAL repaired; Production schema parity UNKNOWN |
 | **P1** | #5 VAT_AMOUNT_DRIZZLE_SCHEMA_GAP | DB OK; visibility for invoice/recon |
+| **CLOSED LOCAL** | #10 ORDERS_DRIVER_NAME_MISSING | STALE_READER → join `drivers.name` |
 
 ---
 
@@ -394,18 +340,19 @@ TEST #3 RUNTIME = BLOCKED BY GATE #10 (orders.driver_name)
 |------|--------------|-------------|
 | #1 TAX | PASS | PASS |
 | #2 COST / GROSS PROFIT | PASS | PASS |
-| #3 AP / PLATFORM PROFIT | **STATIC LOGIC VERIFIED** | **BLOCKED — RUNTIME / INITIALIZATION / SCHEMA CONTRACT** |
+| #3 AP / PLATFORM PROFIT | **STATIC LOGIC VERIFIED** | **PASS LOCAL** |
 
 ### TEST #3 locked wording
 
-- **Must not** record as: PASS  
-- **Must not** record as: FORMULA FAIL  
-- Correct: AP repair logic (static) shows trusted settlement → `driver_payout` → AP; no trusted settlement → NULL; legacy ×80 removed in repair scope. LOCAL runtime could not complete settlement → **AP Runtime = NOT VERIFIED**.
+- **LOCAL runtime:** **PASS LOCAL** (CASE A trusted settlement → AP=payout=8500, platform_profit=1500; CASE B no settlement → AP/profit NULL; no ×80/×15 revived).
+- **Must not** upgrade to: Production PASS / PRODUCTION_READY.
+- Static: trusted settlement → `driver_payout` → AP; no trusted settlement → NULL; legacy ×80 removed in repair scope.
 
-**REPAIR_FORMULAS_VERIFIED_SO_FAR** = YES for TAX + COST/GP; AP = static only  
+**REPAIR_FORMULAS_VERIFIED_SO_FAR** = YES for TAX + COST/GP + AP (LOCAL runtime)  
 **ENVIRONMENT_INITIALIZATION_PARITY_NOT_PROVEN** = YES  
 **PRODUCTION ENVIRONMENT STATE** = UNKNOWN  
-**TOTAL OPEN HIGH GO-LIVE GATES** = 6 (#5–#10)  
+**TOTAL OPEN HIGH GO-LIVE GATES** = 5 (#5–#9)  
+**#10** = CLOSED LOCAL  
 **PRODUCTION_READY** = NO
 
 ---
@@ -413,8 +360,8 @@ TEST #3 RUNTIME = BLOCKED BY GATE #10 (orders.driver_name)
 ## Next (locked)
 
 - Fresh Environment Initialization Audit: **DONE**.  
-- #8/#9 plan: **content approved**; **IMPLEMENTATION = NOT CURRENTLY AUTHORIZED** (both).  
-- #9 sub-gap `ORDER_SETTLEMENTS_ORDER_ID_UNIQUE_GAP`: **CONFIRMED LOCAL**; Production **UNKNOWN**.  
-- Do **not** start Runtime TEST #4 while #8/#9/#10 OPEN without explicit reopen.  
-- Do **not** mid-suite repair #8/#9/#10; do **not** run UNIQUE migration without duplicate preflight.  
-- Preferred next (when authorized): unify init contract for #8/#9 including UNIQUE(order_id); SSoT for #10; #6/#7 intake separately.
+- #8/#9 LOCAL minimal repair: **COMMITTED** (`102f59e`); GO-LIVE still OPEN until Production schema evidence.  
+- #10: **CLOSED LOCAL** (this commit; retroactive authorization).  
+- #9 sub-gap `ORDER_SETTLEMENTS_ORDER_ID_UNIQUE_GAP`: **CONFIRMED LOCAL** (repaired locally); Production **UNKNOWN**.  
+- Do **not** start Runtime TEST #4 without explicit reopen.  
+- Preferred next (when authorized): #6/#7 intake path; #5 VAT transport; Production RO evidence for #8/#9.

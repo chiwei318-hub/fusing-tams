@@ -120,7 +120,7 @@ async function calcFinancials(orderId: number): Promise<void> {
       o.id, o.order_no, o.status,
       COALESCE(o.total_fee, 0)::numeric   AS ar_total,
       COALESCE(o.driver_id, 0)            AS driver_id,
-      o.driver_name,
+      d.name                              AS driver_name,
       o.required_vehicle_type             AS vehicle_type,
       o.need_tailgate,
       o.need_hydraulic_pallet,
@@ -129,6 +129,7 @@ async function calcFinancials(orderId: number): Promise<void> {
       os.payment_status                   AS settlement_payment_status,
       os.driver_payout::numeric           AS driver_payout
     FROM orders o
+    LEFT JOIN drivers d ON d.id = o.driver_id
     LEFT JOIN order_settlements os ON os.order_id = o.id
     WHERE o.id = $1 LIMIT 1
   `, [orderId]);
