@@ -4,8 +4,8 @@
  *
  * Source evidence:
  * - calc_order_finance: artifacts/api-server/src/routes/orders.ts (exclusive)
- * - auto_create_financials: financials.ts (~82-87) — still ×0.15 / ×1.05 commercial split
- * - calcFinancials (JS): financials.ts (~127-141) exclusive AR tax
+ * - auto_create_financials: financials.ts — #3C stop fake ×15; profit/revenue/margin NULL until calcFinancials
+ * - calcFinancials (JS): financials.ts — exclusive AR tax; platform_profit = AR−AP (unchanged by #3C)
  * - monthlyBilling generate: exclusive
  * - monthlyBilling invoice-from-bill: exclusive on order sum (tax_engine)
  * - autoInvoice: exclusive
@@ -38,7 +38,21 @@ export function orderFinanceTrigger({ total_fee, driver_pay_rate, rate_per_trip 
   return { vat_amount: vat, cost_amount: rate, profit_amount: profit };
 }
 
+/** Production: auto_create_financials after #3C — withhold fake ×15 profit */
 export function financialsAutoCreateTrigger({ total_fee }) {
+  const t = Number(total_fee) || 0;
+  return {
+    ar_total: t,
+    ar_grand_total: t * 1.05,
+    ap_total: t * 0.8, // #3F still hardcoded; unchanged this round
+    platform_profit: null,
+    platform_revenue: null,
+    profit_margin_pct: null,
+  };
+}
+
+/** Pre-#3C trigger behavior (historical rows / regression documentation only) */
+export function financialsAutoCreateTriggerLegacy15({ total_fee }) {
   const t = Number(total_fee) || 0;
   return {
     ar_total: t,
@@ -59,9 +73,45 @@ export function financialsCalcJs({ total_fee: ar_total, ap_base = 0, need_tailga
   let base = Number(ap_base) || 0;
   if (base <= 0) base = Math.round(ar * 0.8);
   const ap_total = base + ap_tailgate + ap_other;
+  const platform_revenue = ar; // Writer B: full AR (≠ trigger fee×0.15)
+  const platform_cost = ap_total;
   const platform_profit = ar - ap_total;
   const profit_margin_pct = ar > 0 ? Math.round((platform_profit / ar) * 1000) / 10 : 0;
-  return { ar_total: ar, ar_tax, ar_grand_total: ar_grand, ap_base: base, ap_total, platform_profit, profit_margin_pct };
+  return {
+    ar_total: ar,
+    ar_tax,
+    ar_grand_total: ar_grand,
+    ap_base: base,
+    ap_total,
+    platform_revenue,
+    platform_cost,
+    platform_profit,
+    profit_margin_pct,
+  };
+}
+
+/** Monthly SUM(platform_profit) — PG SUM skips NULL; JS must not coerce NULL→0 before sum if mimicking SQL */
+export function financialsMonthlyProfitSum(rows) {
+  return rows.reduce((s, r) => {
+    if (r.platform_profit == null) return s;
+    return s + Number(r.platform_profit);
+  }, 0);
+}
+
+/** Count rows with unknown/pending profit — documents AGGREGATE_COMPLETENESS_GAP */
+export function financialsPendingProfitCount(rows) {
+  return rows.filter((r) => r.platform_profit == null).length;
+}
+
+/** Dashboard row cell policy #3C — never Number(null)→0 */
+export function financialsFmtProfitCell(v) {
+  if (v == null || v === "") return "待計算";
+  return `$${Number(v).toLocaleString()}`;
+}
+
+export function financialsFmtMarginCell(v) {
+  if (v == null || v === "") return "—";
+  return `${v}%`;
 }
 
 export function monthlyBillingGenerateExclusive(total) {

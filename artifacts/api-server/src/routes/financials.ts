@@ -65,6 +65,7 @@ export async function ensureFinancialsTables(): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_of_order_id ON order_financials (order_id)`);
 
   // DB 觸發器：訂單 → delivered 時自動產生財務清算
+  // MONEY #3C: stop fake ×15% profit — platform_profit/revenue/margin = NULL until calcFinancials
   await pool.query(`
     CREATE OR REPLACE FUNCTION auto_create_financials()
     RETURNS TRIGGER AS $$
@@ -82,9 +83,9 @@ export async function ensureFinancialsTables(): Promise<void> {
           COALESCE(NEW.total_fee, 0),
           COALESCE(NEW.total_fee, 0) * 1.05,
           COALESCE((NEW.total_fee::numeric * 0.80), 0),
-          COALESCE(NEW.total_fee, 0) * 0.15,
-          COALESCE(NEW.total_fee, 0) * 0.15,
-          15
+          NULL,
+          NULL,
+          NULL
         )
         ON CONFLICT (order_id) DO NOTHING;
       END IF;

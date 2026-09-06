@@ -7,6 +7,7 @@ import {
   reportsGrossMarginDriverCost,
   orderFinanceTrigger,
   financialsAutoCreateTrigger,
+  financialsCalcJs,
 } from "./formulas.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -127,10 +128,12 @@ describe("MONEY #3A isolation: GP / Driver Pay / reports70 / financials15 unchan
     assert.match(src, /cost_status/);
   });
 
-  it("financials ×15% LEGACY still present (not repaired this round)", () => {
+  it("financials trigger no longer writes ×15; Writer B AR−AP still 2000", () => {
     const r = financialsAutoCreateTrigger({ total_fee: 10000 });
-    assert.equal(r.platform_profit, 1500);
+    assert.equal(r.platform_profit, null);
     const src = readSrc("artifacts/api-server/src/routes/financials.ts");
-    assert.match(src, /0\.15|total_fee\s*\*\s*0\.15/);
+    const trig = src.slice(src.indexOf("auto_create_financials"), src.indexOf("async function calcFinancials"));
+    assert.doesNotMatch(trig, /COALESCE\(NEW\.total_fee,\s*0\)\s*\*\s*0\.15/);
+    assert.equal(financialsCalcJs({ total_fee: 10000 }).platform_profit, 2000);
   });
 });

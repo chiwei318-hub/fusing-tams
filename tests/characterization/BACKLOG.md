@@ -6,10 +6,11 @@
 | 2 | `financials` ×0.15 profit split | Deferred | Business decision — separate from VAT | Medium |
 | 2b | `orders.profit_amount` subtracts VAT | **Done** (profit = total − cost; see PROFIT-NO-VAT-REPAIR.md) | — | — |
 | 2c | `commission_rate` meaning split (driver vs platform) | **#3A Done** (receipts); reports=#3B deferred | See COMMISSION-DRIVER-SEMANTIC-REPAIR.md | Medium |
-| 2d | `cost_amount=0` when no route rate → profit≈revenue (overstated) | **#2dA Done** (unknown→NULL); historical zeros deferred | See COST-UNKNOWN-WRITER-REPAIR.md | Medium |
+| 2d | `cost_amount=0` when no route rate → profit≈revenue (overstated) | **#2dA OVERALL CLOSED** (unknown→NULL); historical zeros deferred | See COST-UNKNOWN-WRITER-REPAIR.md; GIT FORENSICS PASS | Medium |
 | 3 | `exception` → TMS `picking` visibility | Observing | Confirm downstream on `order_status` only | Low |
 | 3B | REPORT DRIVER COST RATE (reports COALESCE 70) | **Done** (#3B REPAIR) | See REPORT-70-COST-REPAIR.md | — |
-| 3C | financials ×15% deprecate/rename | Deferred | LEGACY_HARDCODED_APPROXIMATION | Medium |
+| 3C | financials ×15% stop-fake profit | **REPAIR Done** (trigger NULL; historical ×15 KEEP) | See FINANCIALS-15-STOP-FAKE-PROFIT-REPAIR.md | Medium |
+| 3C-agg | Financials monthly SUM/Excel **AGGREGATE_COMPLETENESS_GAP** | Open | SUM ignores NULL profit rows with no pending/PARTIAL indicator; follow-up report-layer | Medium |
 | 3D | `PLATFORM_COMMISSION_RATE` SSoT (prerequisite to restore OCR auto-post) | Deferred | Missing formal platform rate for OCR path | High |
 | 3E | Historical OCR AR / driver_earnings written under inverted platform semantic | Deferred | Audit only; no bulk rewrite | Medium |
 | 3F | AP ×80% proxy (`order_financials` / arAp) | Deferred | Not real AP; separate from commission | Medium |

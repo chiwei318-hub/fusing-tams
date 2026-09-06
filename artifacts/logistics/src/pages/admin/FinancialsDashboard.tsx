@@ -35,8 +35,9 @@ interface Financial {
   ap_tailgate: number;
   ap_frozen: number;
   ap_total: number;
-  platform_profit: number;
-  profit_margin_pct: number;
+  /** null = trigger shell / not yet calcFinancials (#3C) */
+  platform_profit: number | null;
+  profit_margin_pct: number | null;
   ar_status: string;
   ap_status: string;
 }
@@ -69,6 +70,16 @@ function monthOptions() {
 }
 
 function n(v: unknown) { return Number(v ?? 0).toLocaleString(); }
+
+/** #3C: NULL profit/margin = pending calc — never Number(null)→0 / ??0 */
+function fmtProfitCell(v: unknown) {
+  if (v == null || v === "") return "待計算";
+  return `$${Number(v).toLocaleString()}`;
+}
+function fmtMarginCell(v: unknown) {
+  if (v == null || v === "") return "—";
+  return `${v}%`;
+}
 
 function StatCard({ label, value, sub, icon: Icon, trend }: {
   label: string; value: string; sub?: string;
@@ -182,9 +193,11 @@ export default function FinancialsDashboard() {
           <StatCard label="訂單數" value={String(s.total_orders)} icon={BarChart3} />
           <StatCard label="AR 應收" value={`$${n(s.total_ar)}`} sub="廠商收款金額" icon={TrendingUp} trend="up" />
           <StatCard label="AP 應付" value={`$${n(s.total_ap)}`} sub="司機薪資支出" icon={TrendingDown} trend="down" />
-          <StatCard label="平台淨利" value={`$${n(s.total_platform_profit)}`} sub="AR - AP"
+          <StatCard label="平台淨利" value={`$${n(s.total_platform_profit)}`}
+            sub="已計算列合計（待計算列未列入 SUM）"
             icon={DollarSign} trend={s.total_platform_profit >= 0 ? "up" : "down"} />
-          <StatCard label="利潤率" value={String(s.profit_margin)} icon={TrendingUp} />
+          <StatCard label="利潤率" value={String(s.profit_margin)}
+            sub="相對已計算 AR；非全月保證完整" icon={TrendingUp} />
           <StatCard label="稅金(5%)" value={`$${n(s.total_tax)}`} icon={DollarSign} />
         </div>
       )}
@@ -237,11 +250,17 @@ export default function FinancialsDashboard() {
                       <TableCell className="text-right font-mono text-green-700">${n(f.ar_total)}</TableCell>
                       <TableCell className="text-right font-mono text-xs text-gray-500">${n(f.ar_grand_total)}</TableCell>
                       <TableCell className="text-right font-mono text-red-600">${n(f.ap_total)}</TableCell>
-                      <TableCell className={`text-right font-mono font-bold ${Number(f.platform_profit) < 0 ? "text-red-600" : "text-blue-700"}`}>
-                        ${n(f.platform_profit)}
+                      <TableCell className={`text-right font-mono font-bold ${
+                        f.platform_profit == null ? "text-muted-foreground" :
+                        Number(f.platform_profit) < 0 ? "text-red-600" : "text-blue-700"
+                      }`}>
+                        {fmtProfitCell(f.platform_profit)}
                       </TableCell>
-                      <TableCell className={`text-right text-xs ${Number(f.profit_margin_pct) < 10 ? "text-red-500" : "text-green-600"}`}>
-                        {f.profit_margin_pct ?? 0}%
+                      <TableCell className={`text-right text-xs ${
+                        f.profit_margin_pct == null ? "text-muted-foreground" :
+                        Number(f.profit_margin_pct) < 10 ? "text-red-500" : "text-green-600"
+                      }`}>
+                        {fmtMarginCell(f.profit_margin_pct)}
                       </TableCell>
                       <TableCell>
                         {f.ar_status === "paid"

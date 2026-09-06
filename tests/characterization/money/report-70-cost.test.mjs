@@ -109,10 +109,10 @@ describe("MONEY #3B: report gross-margin canonical cost (no 70%)", () => {
     );
   });
 
-  it("isolation: GP writer / financials×15 unchanged", () => {
+  it("isolation: GP writer unchanged; financials trigger profit now NULL (#3C)", () => {
     const gp = orderFinanceTrigger({ total_fee: 10000, driver_pay_rate: 800 });
     assert.equal(gp.profit_amount, 9200);
     const fin = financialsAutoCreateTrigger({ total_fee: 10000 });
-    assert.equal(fin.platform_profit, 1500);
+    assert.equal(fin.platform_profit, null);
   });
 });
