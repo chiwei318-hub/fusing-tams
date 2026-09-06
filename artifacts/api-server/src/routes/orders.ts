@@ -29,6 +29,28 @@ import { autoCalculateSettlement } from "./franchiseSettlements.js";
 import { ensureOrderFinanceColumns, calcOrderFinance } from "./orderFinanceColumns.js";
 import { syncOrderToLocationHistory } from "../lib/ensureLocationTables.js";
 import { prepareStatusWrite } from "../lib/orderStatusEngine.js";
+import {
+  normalizePhone,
+  resolveCustomerIdFromMatches,
+} from "../lib/phoneCustomerResolve.js";
+import { applyCommercialOrderCost } from "../lib/applyCommercialOrderCost.js";
+
+/** Resolve customer_id: explicit picker id wins; else phone normalize unique match. */
+async function resolveCreateCustomerId(opts: {
+  explicitCustomerId?: number | null;
+  phone: string;
+}): Promise<number | null> {
+  if (opts.explicitCustomerId != null && opts.explicitCustomerId > 0) {
+    return opts.explicitCustomerId;
+  }
+  const phone = normalizePhone(opts.phone);
+  if (!phone || phone === "未提供" || phone.length < 4) return null;
+  const { rows } = await pool.query<{ id: number; phone: string }>(
+    `SELECT id, phone FROM customers WHERE phone IS NOT NULL`,
+  );
+  const matches = rows.filter((r) => normalizePhone(r.phone) === phone);
+  return resolveCustomerIdFromMatches(matches).customerId;
+}
 
 const router: IRouter = Router();
 
@@ -78,6 +100,11 @@ async function ensureOrderFinanceTrigger() {
   `);
   await pool.query(`ALTER TABLE route_prefix_rates ADD COLUMN IF NOT EXISTS driver_pay_rate NUMERIC(10,2) DEFAULT 0`);
   // 1. 觸發器函式（未稅外加 5%）
+  // #12 COMMERCIAL_COST_OVERWRITE_ON_TRIGGER_REFIRE:
+  //   T1 NULL→NULL: preserve existing cost (commercial/manual durable)
+  //   T2 NULL→prefix / T3 prefix→prefix: Shopee route_prefix_rates owns cost
+  //   T4 prefix→NULL: clear stale Shopee cost (NULL), do NOT preserve
+  // profit = total_fee - cost_amount when both known; VAT not deducted from GP
   await pool.query(`
     CREATE OR REPLACE FUNCTION calc_order_finance()
     RETURNS TRIGGER AS $$
@@ -86,27 +113,38 @@ async function ensureOrderFinanceTrigger() {
       v_comm   NUMERIC := 0;
       v_vat    NUMERIC;
     BEGIN
-      -- 有效費率：driver_pay_rate > 0，否則 rate_per_trip > 0；否則 UNKNOWN（NULL）
-      -- 禁止 COALESCE(...,0) 把缺費率寫成 0
+      -- Shopee lookup against NEW.route_prefix (unchanged rate meaning)
       SELECT COALESCE(NULLIF(driver_pay_rate, 0), NULLIF(rate_per_trip, 0))
         INTO v_rate
         FROM route_prefix_rates
        WHERE prefix = NEW.route_prefix
        LIMIT 1;
 
-      -- 無 row 時 v_rate 維持 NULL；<=0 亦視為 UNKNOWN
       IF v_rate IS NOT NULL AND v_rate <= 0 THEN
         v_rate := NULL;
       END IF;
 
-      NEW.cost_amount := v_rate;
+      IF TG_OP = 'INSERT' THEN
+        NEW.cost_amount := v_rate;
+      ELSIF NEW.route_prefix IS NOT NULL THEN
+        -- T2 / T3: Shopee owns resulting cost
+        NEW.cost_amount := v_rate;
+      ELSIF OLD.route_prefix IS NOT NULL THEN
+        -- T4: Shopee → NULL — do not retain stale Shopee cost as commercial
+        NEW.cost_amount := NULL;
+        v_rate := NULL;
+      ELSE
+        -- T1: NULL → NULL stable — preserve NEW.cost_amount (commercial/manual)
+        -- Do NOT replace with NULL from empty route_prefix_rates lookup
+        NULL;
+      END IF;
 
-      -- 銷項稅：未稅外加 5%（與成本是否已知無關）
+      -- 銷項稅：未稅外加 5%；毛利用最終 cost_amount（非強制 v_rate）
       IF NEW.total_fee IS NOT NULL AND NEW.total_fee > 0 THEN
         v_vat := ROUND((NEW.total_fee * 0.05)::NUMERIC, 2);
         NEW.vat_amount := v_vat;
-        IF v_rate IS NOT NULL THEN
-          NEW.profit_amount := ROUND((NEW.total_fee - v_rate)::NUMERIC, 2);
+        IF NEW.cost_amount IS NOT NULL THEN
+          NEW.profit_amount := ROUND((NEW.total_fee - NEW.cost_amount)::NUMERIC, 2);
         ELSE
           NEW.profit_amount := NULL;
         END IF;
@@ -115,7 +153,7 @@ async function ensureOrderFinanceTrigger() {
         NEW.profit_amount := NULL;
       END IF;
 
-      -- 車隊結算（有 fusingao_fleet_id 才計算）
+      -- 車隊結算仍依 route_prefix 費率（Shopee）；商業無 prefix → v_rate NULL
       IF NEW.fusingao_fleet_id IS NOT NULL THEN
         IF v_rate IS NULL THEN
           NEW.fleet_payout := NULL;
@@ -529,26 +567,49 @@ router.get("/orders", async (req, res) => {
 router.post("/orders", async (req, res) => {
   try {
     const body = CreateOrderBody.parse(req.body);
+    // CORE SECURITY: never trust client cost / profit / rate ids
+    const clientCostRaw =
+      (req.body as { cost_amount?: unknown; costAmount?: unknown }).cost_amount ??
+      (req.body as { costAmount?: unknown }).costAmount;
+    const clientCostAmount =
+      clientCostRaw === undefined || clientCostRaw === null
+        ? undefined
+        : Number(clientCostRaw);
+
+    const resolvedCustomerId = await resolveCreateCustomerId({
+      explicitCustomerId: body.customerId ?? null,
+      phone: body.customerPhone,
+    });
+
+    const vehicleCanonical =
+      body.requiredVehicleType ?? body.vehicleType ?? null;
+
     const [order] = await db
       .insert(ordersTable)
       .values({
+        customerId: resolvedCustomerId,
         customerName: body.customerName,
         customerPhone: body.customerPhone,
         pickupDate: body.pickupDate ?? null,
         pickupTime: body.pickupTime ?? null,
         requiredLicense: body.requiredLicense ?? null,
         pickupContactName: body.pickupContactName ?? null,
+        pickupCity: body.pickupCity ?? null,
+        pickupDistrict: body.pickupDistrict ?? null,
         pickupAddress: body.pickupAddress,
         pickupContactPerson: body.pickupContactPerson ?? null,
         deliveryDate: body.deliveryDate ?? null,
         deliveryTime: body.deliveryTime ?? null,
         deliveryContactName: body.deliveryContactName ?? null,
+        deliveryCity: body.deliveryCity ?? null,
+        deliveryDistrict: body.deliveryDistrict ?? null,
         deliveryAddress: body.deliveryAddress,
         deliveryContactPerson: body.deliveryContactPerson ?? null,
         cargoDescription: body.cargoDescription,
         cargoQuantity: body.cargoQuantity ?? null,
         cargoWeight: body.cargoWeight ?? null,
-        requiredVehicleType: body.requiredVehicleType ?? null,
+        requiredVehicleType: vehicleCanonical,
+        vehicleType: body.vehicleType ?? body.requiredVehicleType ?? null,
         needTailgate: body.needTailgate ?? null,
         needHydraulicPallet: body.needHydraulicPallet ?? null,
         specialRequirements: body.specialRequirements ?? null,
@@ -560,9 +621,42 @@ router.post("/orders", async (req, res) => {
         orderStatus: "pending",
         status: "pending",
         feeStatus: "unpaid",
+        // cost_amount intentionally omitted — trigger may set Shopee NULL;
+        // commercial engine applies after insert and ignores clientCostAmount
       })
       .returning();
-    res.status(201).json({ ...order, driver: null });
+
+    // Commercial cost writer (skip if route_prefix / Shopee). After trigger.
+    let costMeta: Awaited<ReturnType<typeof applyCommercialOrderCost>> | null = null;
+    try {
+      costMeta = await applyCommercialOrderCost({
+        orderId: order.id,
+        facts: {
+          customerId: resolvedCustomerId,
+          originCity: body.pickupCity ?? null,
+          originDistrict: body.pickupDistrict ?? null,
+          destinationCity: body.deliveryCity ?? null,
+          destinationDistrict: body.deliveryDistrict ?? null,
+          vehicleType: vehicleCanonical,
+          serviceType: body.serviceType ?? null,
+        },
+        clientCostAmount,
+        totalFee: order.totalFee ?? null,
+        routePrefix: order.routePrefix ?? null,
+        mode: "create",
+      });
+    } catch (err) {
+      req.log?.error?.({ err }, "commercial cost apply failed");
+    }
+
+    const refreshed =
+      costMeta && !costMeta.skipped
+        ? (
+            await db.select().from(ordersTable).where(eq(ordersTable.id, order.id))
+          )[0]
+        : order;
+
+    res.status(201).json({ ...refreshed, driver: null });
 
     setImmediate(async () => {
       // 0a. 同步地點歷史資料庫
@@ -574,7 +668,7 @@ router.post("/orders", async (req, res) => {
           deliveryAddress:  order.deliveryAddress  ?? undefined,
           deliveryCity:     (order as any).deliveryCity   ?? undefined,
           deliveryDistrict: (order as any).deliveryDistrict ?? undefined,
-          customerId:       (order as any).customerId    ?? undefined,
+          customerId:       (refreshed as any).customerId    ?? (order as any).customerId    ?? undefined,
           driverId:         (order as any).driverId      ?? undefined,
         });
       } catch { /* silent */ }
@@ -833,6 +927,9 @@ router.patch("/orders/:id", async (req, res) => {
     if (body.qty !== undefined) updates.qty = body.qty ?? null;
     if (body.grossWeight !== undefined) updates.grossWeight = body.grossWeight ?? null;
     if (body.quoteAmount !== undefined) updates.quoteAmount = body.quoteAmount ?? null;
+    // G3 restore: pre-#6 PATCH may set costAmount/profitAmount (manual/admin).
+    // This does NOT authorize client cost on commercial CREATE — CreateOrderBody
+    // omits cost fields; applyCommercialOrderCost ignores req.body cost.
     if (body.costAmount !== undefined) updates.costAmount = body.costAmount ?? null;
     if (body.profitAmount !== undefined) updates.profitAmount = body.profitAmount ?? null;
     if (body.driverPay !== undefined) updates.driverPay = body.driverPay ?? null;

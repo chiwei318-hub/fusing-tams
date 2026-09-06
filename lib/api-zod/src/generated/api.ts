@@ -79,21 +79,28 @@ export const ListOrdersResponse = zod.array(ListOrdersResponseItem);
 export const CreateOrderBody = zod.object({
   customerName: zod.string(),
   customerPhone: zod.string(),
+  customerId: zod.number().int().positive().nullish(),
   pickupDate: zod.string().nullish(),
   pickupTime: zod.string().nullish(),
   requiredLicense: zod.string().nullish(),
   pickupContactName: zod.string().nullish(),
+  pickupCity: zod.string().nullish(),
+  pickupDistrict: zod.string().nullish(),
   pickupAddress: zod.string(),
   pickupContactPerson: zod.string().nullish(),
   deliveryDate: zod.string().nullish(),
   deliveryTime: zod.string().nullish(),
   deliveryContactName: zod.string().nullish(),
+  deliveryCity: zod.string().nullish(),
+  deliveryDistrict: zod.string().nullish(),
   deliveryAddress: zod.string(),
   deliveryContactPerson: zod.string().nullish(),
   cargoDescription: zod.string(),
   cargoQuantity: zod.string().nullish(),
   cargoWeight: zod.number().nullish(),
   requiredVehicleType: zod.string().nullish(),
+  vehicleType: zod.string().nullish(),
+  serviceType: zod.string().nullish(),
   needTailgate: zod.preprocess(v => v === true ? "true" : v === false ? "false" : v, zod.string().nullish()),
   needHydraulicPallet: zod.preprocess(v => v === true ? "true" : v === false ? "false" : v, zod.string().nullish()),
   specialRequirements: zod.string().nullish(),
@@ -101,6 +108,7 @@ export const CreateOrderBody = zod.object({
   extraPickupAddresses: zod.string().nullish(),
   extraDeliveryAddresses: zod.string().nullish(),
   operatorName: zod.string().nullish(),
+  // costAmount / profitAmount intentionally OMITTED — client money is never trusted
 });
 
 /**

@@ -136,7 +136,13 @@ function delHist(key: string, v: string) {
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────
-export interface AddressLocation { lat: number; lng: number; formattedAddress: string }
+export interface AddressLocation {
+  lat?: number;
+  lng?: number;
+  formattedAddress: string;
+  city: string;
+  district: string;
+}
 interface Props {
   value: string;
   onChange: (value: string) => void;
@@ -149,7 +155,7 @@ interface Props {
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export function TaiwanAddressInput({ value, onChange, historyKey = "default", addressType = "both", className, error, onBlur }: Props) {
+export function TaiwanAddressInput({ value, onChange, onLocationChange, historyKey = "default", addressType = "both", className, error, onBlur }: Props) {
   const init = useMemo(() => parseAddress(value), []); // eslint-disable-line react-hooks/exhaustive-deps
   const [city, setCity]         = useState(init.city);
   const [district, setDistrict] = useState(init.district);
@@ -216,8 +222,13 @@ export function TaiwanAddressInput({ value, onChange, historyKey = "default", ad
     const full = buildAddr(c, d, r, n);
     prevVal.current = full;
     onChange(full);
+    onLocationChange?.({
+      formattedAddress: full,
+      city: c,
+      district: d,
+    });
     if (isAddressComplete(full)) saveHist(historyKey, full);
-  }, [onChange, historyKey]);
+  }, [onChange, onLocationChange, historyKey]);
 
   // ── City change ──
   const handleCity = (c: string) => {

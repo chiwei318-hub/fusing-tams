@@ -14,6 +14,8 @@ export * from "./ratings";
 export * from "./quoteRequests";
 export * from "./settlements";
 export * from "./pricingConfig";
+export * from "./commercialTripCostRates";
+export * from "./orderCostLookups";
 export * from "./arApRecords";
 export * from "./fusingaoFleets";
 export * from "./franchisees";

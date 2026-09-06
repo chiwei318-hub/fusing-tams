@@ -24,20 +24,22 @@ const VEHICLE_TYPES = ["箱型車", "冷藏車", "尾門車", "平板車", "貨�
 /* ── 客戶選取器 ────────────────────────────────────────────────────────────── */
 interface CustomerPickerProps {
   customers: Array<{ id: number; name: string; phone: string; address?: string | null }>;
-  onSelect: (c: { name: string; phone: string; address?: string | null }) => void;
+  onSelect: (c: { id: number; name: string; phone: string; address?: string | null }) => void;
 }
 function CustomerPicker({ customers, onSelect }: CustomerPickerProps) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState("");
 
-  const filtered = customers.filter(c =>
+  // Recent / frequent first: stable id desc as proxy when no frequency SSoT
+  const ranked = [...customers].sort((a, b) => b.id - a.id);
+  const filtered = ranked.filter(c =>
     !q || c.name.includes(q) || c.phone.includes(q)
   ).slice(0, 8);
 
   const handlePick = (c: typeof customers[0]) => {
     setSelected(c.name); setQ(c.name); setOpen(false);
-    onSelect({ name: c.name, phone: c.phone, address: c.address });
+    onSelect({ id: c.id, name: c.name, phone: c.phone, address: c.address });
   };
 
   return (
@@ -54,7 +56,7 @@ function CustomerPicker({ customers, onSelect }: CustomerPickerProps) {
       )}
       {open && filtered.length > 0 && (
         <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-amber-200 rounded-lg shadow-lg overflow-hidden">
-          <div className="px-3 py-1.5 border-b bg-amber-50/60 text-[10px] text-amber-600 font-medium">客戶資料庫</div>
+          <div className="px-3 py-1.5 border-b bg-amber-50/60 text-[10px] text-amber-600 font-medium">客戶資料庫（最近優先）</div>
           <div className="max-h-48 overflow-y-auto">
             {filtered.map(c => (
               <div key={c.id} onMouseDown={() => handlePick(c)}
@@ -206,13 +208,18 @@ export function QuickOrderPanel({ onCreated }: QuickOrderPanelProps) {
   const [phone, setPhone] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [customerAddr, setCustomerAddr] = useState("");
+  const [customerId, setCustomerId] = useState<number | null>(null);
   const [lookupDone, setLookupDone] = useState(false);
 
   const [pickupAddress, setPickupAddress] = useState("");
+  const [pickupCity, setPickupCity] = useState("");
+  const [pickupDistrict, setPickupDistrict] = useState("");
   const [pickupDate, setPickupDate] = useState("");
   const [pickupTime, setPickupTime] = useState("");
 
   const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [deliveryCity, setDeliveryCity] = useState("");
+  const [deliveryDistrict, setDeliveryDistrict] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("");
   const [deliveryTime, setDeliveryTime] = useState("");
 
@@ -236,37 +243,43 @@ export function QuickOrderPanel({ onCreated }: QuickOrderPanelProps) {
     staleTime: 5 * 60 * 1000,
   });
 
-  // Phone → auto-lookup customer
+  // Phone → auto-lookup customer (unique normalized match only)
   useEffect(() => {
     setLookupDone(false);
     if (phone.length < 6) return;
     const t = setTimeout(() => {
-      const match = (customers as any[]).find(c => c.phone?.replace(/\D/g, "") === phone.replace(/\D/g, ""));
-      if (match) {
+      const norm = (p: string) => p.replace(/\D/g, "");
+      const matches = (customers as any[]).filter(c => norm(c.phone ?? "") === norm(phone));
+      if (matches.length === 1) {
+        const match = matches[0];
+        setCustomerId(match.id);
         setCustomerName(match.name ?? "");
         setCustomerAddr(match.address ?? "");
         setLookupDone(true);
+      } else if (matches.length > 1) {
+        setCustomerId(null);
+        setLookupDone(false);
       }
     }, 400);
     return () => clearTimeout(t);
   }, [phone, customers]);
 
-  const handleCustomerSelect = (c: { name: string; phone: string; address?: string | null }) => {
+  const handleCustomerSelect = (c: { id: number; name: string; phone: string; address?: string | null }) => {
+    setCustomerId(c.id);
     setCustomerName(c.name);
     setPhone(c.phone ?? "");
     setCustomerAddr(c.address ?? "");
     setLookupDone(true);
-    // pre-fill pickup address from customer address if empty
+    // pre-fill pickup address from customer address if empty — no re-type of known data
     if (!pickupAddress && c.address) setPickupAddress(c.address);
   };
 
   const reset = () => {
-    setPhone(""); setCustomerName(""); setCustomerAddr(""); setLookupDone(false);
-    setPickupAddress(""); setPickupDate(""); setPickupTime("");
-    setDeliveryAddress(""); setDeliveryDate(""); setDeliveryTime("");
+    setPhone(""); setCustomerName(""); setCustomerAddr(""); setCustomerId(null); setLookupDone(false);
+    setPickupAddress(""); setPickupCity(""); setPickupDistrict(""); setPickupDate(""); setPickupTime("");
+    setDeliveryAddress(""); setDeliveryCity(""); setDeliveryDistrict(""); setDeliveryDate(""); setDeliveryTime("");
     setExtraStops([]); setCargo(""); setVehicleType(""); setDriverId(""); setNotes("");
     setSuccess(null); setError("");
-    // 接單人員保留，下一筆繼續使用
   };
 
   const availableDrivers = (drivers as any[]).filter(d => d.status === "available" || !d.status);
@@ -281,13 +294,19 @@ export function QuickOrderPanel({ onCreated }: QuickOrderPanelProps) {
         ? JSON.stringify(extraStops.map(s => ({ address: s.address, contactName: s.contactName, phone: s.phone })))
         : null;
 
+      // Facts only — never send cost_amount / profit_amount
       const body: Record<string, unknown> = {
         customerName: customerName.trim(),
         customerPhone: phone.trim() || "未提供",
+        customerId: customerId ?? undefined,
         pickupAddress: pickupAddress.trim(),
+        pickupCity: pickupCity || null,
+        pickupDistrict: pickupDistrict || null,
         pickupDate: pickupDate || null,
         pickupTime: pickupTime || null,
         deliveryAddress: deliveryAddress.trim(),
+        deliveryCity: deliveryCity || null,
+        deliveryDistrict: deliveryDistrict || null,
         deliveryDate: deliveryDate || null,
         deliveryTime: deliveryTime || null,
         cargoDescription: cargo.trim(),
@@ -376,7 +395,7 @@ export function QuickOrderPanel({ onCreated }: QuickOrderPanelProps) {
                     <UserCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                     <span className="font-medium">{customerName}</span>
                     {customerAddr && <span className="text-xs text-muted-foreground truncate">· {customerAddr}</span>}
-                    <button type="button" onClick={() => { setCustomerName(""); setPhone(""); setCustomerAddr(""); setLookupDone(false); }}
+                    <button type="button" onClick={() => { setCustomerName(""); setPhone(""); setCustomerAddr(""); setCustomerId(null); setLookupDone(false); }}
                       className="ml-auto text-muted-foreground hover:text-foreground">
                       <X className="w-3 h-3" />
                     </button>
@@ -392,6 +411,10 @@ export function QuickOrderPanel({ onCreated }: QuickOrderPanelProps) {
                 <TaiwanAddressInput
                   value={pickupAddress}
                   onChange={setPickupAddress}
+                  onLocationChange={(loc) => {
+                    setPickupCity(loc.city || "");
+                    setPickupDistrict(loc.district || "");
+                  }}
                   historyKey="qop-pickup"
                   addressType="pickup"
                 />
@@ -424,6 +447,10 @@ export function QuickOrderPanel({ onCreated }: QuickOrderPanelProps) {
                 <TaiwanAddressInput
                   value={deliveryAddress}
                   onChange={setDeliveryAddress}
+                  onLocationChange={(loc) => {
+                    setDeliveryCity(loc.city || "");
+                    setDeliveryDistrict(loc.district || "");
+                  }}
                   historyKey="qop-delivery"
                   addressType="delivery"
                 />

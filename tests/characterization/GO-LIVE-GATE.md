@@ -77,6 +77,20 @@ STATUS = OPEN — GO-LIVE BLOCKER
 **GO-LIVE CONDITION:** Formal create/import path must naturally produce/pass rate-matching input.  
 Must not require operators to know internal `route_prefix` to get cost.
 
+### #6 Writer progress (LOCAL UNCOMMITTED — 2026-09-06)
+
+```text
+WRITER CORE IMPLEMENTED = YES (Intake + Fast UX wiring + Engine + Provenance)
+CHARACTERIZATION = 150/150 PASS (unit/in-memory + LOCAL DB security fixture)
+BROWSER / HTTP E2E THROUGH QuickOrderPanel = NOT_RUN (local API/UI not up)
+END-TO-END MONEY DURABILITY = FAIL / OPEN  → see GATE #12
+AUTHORIZED SCOPE COMPLETED = NO
+COMMIT GATE = BLOCKED
+```
+
+Commercial path no longer depends on `route_prefix` for standard trip cost (DECISION C / CM-D).  
+#6 GO-LIVE remains OPEN until durability (#12) + normal-path E2E proven.
+
 ---
 
 ## GATE #7 — COST_ENGINE_NORMAL_PATH_COVERAGE_GAP
@@ -104,6 +118,43 @@ UI intake → API payload → canonical route/rate matching → cost_amount → 
 At least:
 - MATCHED: cost = verified rate; profit = total_fee − cost
 - UNMATCHED: cost = NULL; profit = NULL
+
+**#6 Writer note:** Engine + Intake + QuickOrderPanel wiring exist UNCOMMITTED;  
+**browser E2E still NOT_RUN** — do not close #7 on static wiring alone.
+
+---
+
+## GATE #12 — COMMERCIAL_COST_OVERWRITE_ON_TRIGGER_REFIRE
+
+```text
+ID = COMMERCIAL_COST_OVERWRITE_ON_TRIGGER_REFIRE
+TYPE = REPAIR (minimal; trigger or commercial re-apply boundary)
+SEVERITY = HIGH — blocks durable #6 money SSoT / COMMIT
+STATUS = LOCAL REPAIRED (UNCOMMITTED) — Chair Commit Gate pending
+RELATED = #6 / #7
+SELECTED_REPAIR = A trigger-side state-aware (T1–T4)
+PROVENANCE_AS_LIVE_SSOT = NO
+```
+
+**PROVEN chain (pre-repair):**
+
+1. Commercial Engine MATCHED → `UPDATE orders SET cost_amount = C` (only cost/profit columns → trigger does **not** fire).
+2. Later any path that updates `total_fee` OR `route_prefix` OR `fusingao_fleet_id` fired:
+
+```text
+trg_order_finance
+  BEFORE INSERT OR UPDATE OF total_fee, route_prefix, fusingao_fleet_id
+  → calc_order_finance()
+  → NEW.cost_amount := v_rate   -- ALWAYS; ignored prior commercial C
+```
+
+**LOCAL repair (UNCOMMITTED):**
+- T1 NULL→NULL: preserve `NEW.cost_amount`; profit = fee − cost
+- T2/T3 prefix present: Shopee `route_prefix_rates` owns cost (unchanged formula)
+- T4 Shopee→NULL: cost/profit → NULL (no stale Shopee retain)
+- Characterization: `commercial-cost-durability.test.mjs` #12-1..#12-6
+
+**GO-LIVE / COMMIT CONDITION:** Chair review of LOCAL evidence; browser E2E still NOT_RUN (#12a).
 
 ---
 

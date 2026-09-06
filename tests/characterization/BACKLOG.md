@@ -26,6 +26,10 @@
 | 9a | **ORDER_SETTLEMENTS_ORDER_ID_UNIQUE_GAP** | Sub-gap of #9; **LOCAL repaired** (not a new Gate #) | UNIQUE(order_id) applied locally via `0003`; Production UNIQUE state **UNKNOWN** | **HIGH BEFORE GO-LIVE** |
 | 10 | **ORDERS_DRIVER_NAME_MISSING** | **CLOSED LOCAL** (STALE_READER→join `drivers.name`) | No schema ADD; calcFinancials join only — see GO-LIVE-GATE.md | CLOSED LOCAL; prod **UNKNOWN** |
 | 11 | **UI_COST_PROFIT_DISPLAY_GAP** | Open BACKLOG ONLY | API returns cost/profit; Admin list/detail show fee only | Medium |
+| 12 | **COMMERCIAL_COST_OVERWRITE_ON_TRIGGER_REFIRE** | **LOCAL REPAIRED (UNCOMMITTED)** — trigger T1–T4 | `calc_order_finance` state-aware UPDATE: NULL→NULL preserve; Shopee owns when prefix set; Shopee→NULL clears stale. See GO-LIVE-GATE.md | COMMIT blocked until Chair review |
+| 12a | **#6 FAST_UX_BROWSER_E2E_NOT_RUN** | OPEN evidence gap | Writer unit/API wiring + static source checks only; no HTTP/browser E2E while local server down | Medium |
+| 12b | **#6 PATCH costAmount GLOBAL STRIP** | **LOCAL RESTORED (UNCOMMITTED)** — G3 | PATCH `body.costAmount` restored to pre-#6; CREATE still ignores client cost | Medium |
+| 12c | **#6 TEST FIXTURE DELETE (governance)** | CLOSED as incident record | `commercial-cost-db-security.test.mjs` `after()` DELETE by fixture id only — unauthorized vs FORBIDDEN DELETE; technically fixture-scoped | Governance |
 | U | **ENVIRONMENT_INITIALIZATION_PARITY_NOT_PROVEN** | OPEN umbrella; Audit DONE; #8/#9 LOCAL committed | Init SSoT=Drizzle-only; Production parity still NOT_PROVEN — see GO-LIVE-GATE.md | **AUDIT / DEPLOYMENT READINESS** |
 
 #4 evidence: `enterprise.ts` single + bulk inserts use `prepareStatusWrite("pending")`; test `tests/characterization/status/enterprise-create.test.mjs`.
@@ -45,6 +49,7 @@ Canonical registry: [`GO-LIVE-GATE.md`](./GO-LIVE-GATE.md)
 | #9 | ORDER_SETTLEMENTS_SCHEMA_GAP | P0 | OPEN — blocker; LOCAL committed `102f59e` | **LOCAL only**; prod schema **UNKNOWN**; UNIQUE(order_id) LOCAL |
 | #9a | ORDER_SETTLEMENTS_ORDER_ID_UNIQUE_GAP | (under #9) | LOCAL repaired — not a new Gate # | Production UNIQUE state **UNKNOWN** |
 | #10 | ORDERS_DRIVER_NAME_MISSING | P0 | **CLOSED LOCAL** | **LOCAL only**; prod schema **UNKNOWN** |
+| #12 | COMMERCIAL_COST_OVERWRITE_ON_TRIGGER_REFIRE | P0 | **OPEN — #6 WRITER durability** | Blocks durable commercial `cost_amount` SSoT; see below |
 
 Evidence aliases under #6: former `ADMIN_UI_NO_ROUTE_PREFIX_FIELD`, `ROUTE_IMPORT_SOURCE_COLUMN_GAP`.
 
@@ -67,7 +72,19 @@ Do **not** auto-start TEST #4. Await explicit reopen.
 | #3 AP static logic | **VERIFIED** |
 | #3 AP runtime E2E | **PASS LOCAL** (CASE A AP=8500 / profit=1500; CASE B NULL; no ×80/×15) |
 
-**PRODUCTION_READY = NO** while any of #5–#9 OPEN.  
-**TOTAL OPEN HIGH GO-LIVE GATES = 5** (#5–#9)  
+**PRODUCTION_READY = NO** while any of #5–#9 OPEN, or #12 OPEN for durable commercial cost.  
+**TOTAL OPEN HIGH GO-LIVE GATES = 6** (#5–#9 + #12)  
 **#10 = CLOSED LOCAL**  
 Runtime formula PASS ≠ production ready. Do not start TEST #4 without reopen.
+
+### #6 Writer forensic status (2026-09-06)
+
+```text
+WRITER CORE IMPLEMENTED = YES
+END-TO-END MONEY DURABILITY = LOCAL PASS (#12 T1–T4; UNCOMMITTED)
+FAST_UX_BROWSER_E2E = NOT_RUN
+PATCH_COST_SCOPE = LOCAL RESTORED (G3; UNCOMMITTED)
+GOVERNANCE_DELETE = BENIGN_FIXTURE_ONLY_BUT_UNAUTHORIZED (recorded #12c)
+AUTHORIZED SCOPE COMPLETED = CONDITIONAL (E2E still open)
+COMMIT = BLOCKED pending Chair
+```

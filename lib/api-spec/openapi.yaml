@@ -418,14 +418,39 @@ components:
           type: string
         customerPhone:
           type: string
+        customerId:
+          type: integer
+          nullable: true
+          description: Optional customer picker id; never invent from enterprise name
+        pickupCity:
+          type: string
+          nullable: true
+        pickupDistrict:
+          type: string
+          nullable: true
         pickupAddress:
           type: string
+        deliveryCity:
+          type: string
+          nullable: true
+        deliveryDistrict:
+          type: string
+          nullable: true
         deliveryAddress:
           type: string
         cargoDescription:
           type: string
         cargoWeight:
           type: number
+          nullable: true
+        requiredVehicleType:
+          type: string
+          nullable: true
+        vehicleType:
+          type: string
+          nullable: true
+        serviceType:
+          type: string
           nullable: true
         notes:
           type: string
@@ -436,6 +461,9 @@ components:
         - pickupAddress
         - deliveryAddress
         - cargoDescription
+      description: >
+        Client must not supply cost_amount / profit_amount / rate_rule_id / matched_level.
+        Server Cost Engine alone decides orders.cost_amount.
 
     UpdateOrderInput:
       type: object

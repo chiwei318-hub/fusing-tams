@@ -393,6 +393,7 @@ export function reportGrossMarginAggregate(orders, { franchise_cost = 0 } = {}) 
 /**
  * MONEY #2dA — mirror of calc_order_finance cost lookup (AFTER repair).
  * Valid: driver_pay_rate > 0 else rate_per_trip > 0 else NULL (never COALESCE to 0).
+ * Models INSERT / Shopee-owned assignment (always apply v_rate).
  */
 export function calcOrderFinanceCostLookup({
   route_prefix = null,
@@ -424,6 +425,72 @@ export function calcOrderFinanceCostLookup({
         : Number(v_rate) === 0
           ? "SHOULD_NOT_HAPPEN"
           : "KNOWN",
+  };
+}
+
+/**
+ * #12 — mirror calc_order_finance on UPDATE OF total_fee/route_prefix/fusingao_fleet_id
+ * with OLD/NEW route_prefix transitions (T1–T4).
+ *
+ * existing_cost_amount = NEW.cost_amount entering trigger (usually OLD.cost_amount
+ * when UPDATE does not also set cost_amount).
+ */
+export function calcOrderFinanceUpdate({
+  old_route_prefix = null,
+  new_route_prefix = null,
+  total_fee = null,
+  existing_cost_amount = null,
+  rate_row = null,
+} = {}) {
+  const oldP = old_route_prefix == null || old_route_prefix === "" ? null : String(old_route_prefix);
+  const newP = new_route_prefix == null || new_route_prefix === "" ? null : String(new_route_prefix);
+
+  let v_rate = null;
+  if (newP != null && rate_row != null && rate_row !== false) {
+    const dpr = rate_row.driver_pay_rate;
+    const rpt = rate_row.rate_per_trip;
+    if (dpr != null && Number(dpr) > 0) v_rate = Number(dpr);
+    else if (rpt != null && Number(rpt) > 0) v_rate = Number(rpt);
+  }
+
+  let cost_amount;
+  let transition;
+  if (newP != null) {
+    // T2 / T3
+    cost_amount = v_rate;
+    transition = oldP == null ? "T2_NULL_TO_SHOPEE" : "T3_SHOPEE_TO_SHOPEE";
+  } else if (oldP != null) {
+    // T4
+    cost_amount = null;
+    transition = "T4_SHOPEE_TO_NULL";
+  } else {
+    // T1
+    cost_amount =
+      existing_cost_amount == null || existing_cost_amount === ""
+        ? null
+        : Number(existing_cost_amount);
+    if (cost_amount != null && !Number.isFinite(cost_amount)) cost_amount = null;
+    transition = "T1_NULL_TO_NULL_PRESERVE";
+  }
+
+  const fee = total_fee == null ? null : Number(total_fee);
+  let vat_amount = 0;
+  let profit_amount = null;
+  if (fee != null && fee > 0) {
+    vat_amount = Math.round(fee * 0.05 * 100) / 100;
+    if (cost_amount != null) {
+      profit_amount = Math.round((fee - cost_amount) * 100) / 100;
+    }
+  }
+
+  return {
+    transition,
+    old_route_prefix: oldP,
+    new_route_prefix: newP,
+    cost_amount,
+    profit_amount,
+    vat_amount,
+    used_percent_fallback: false,
   };
 }
 

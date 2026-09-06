@@ -9,9 +9,17 @@
 export interface CreateOrderInput {
   customerName: string;
   customerPhone: string;
+  customerId?: number | null;
+  pickupCity?: string | null;
+  pickupDistrict?: string | null;
   pickupAddress: string;
+  deliveryCity?: string | null;
+  deliveryDistrict?: string | null;
   deliveryAddress: string;
   cargoDescription: string;
   cargoWeight?: number | null;
+  requiredVehicleType?: string | null;
+  vehicleType?: string | null;
+  serviceType?: string | null;
   notes?: string | null;
 }
