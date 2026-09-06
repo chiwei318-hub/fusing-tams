@@ -75,12 +75,16 @@ describe("characterization: SAME total_fee=10000 after profit REPAIR", () => {
     assert.equal(tVat, invoicePdfExclusive(TOTAL).taxAmount);
   });
 
-  it("PROVES remaining divergence: order profit ≠ financials AR−AP after recalc", () => {
+  it("PROVES remaining divergence: order profit ≠ financials AR−AP after verified settlement", () => {
     const tProfit = orderFinanceTrigger({ total_fee: TOTAL, driver_pay_rate: DRIVER_RATE }).profit_amount;
-    const fProfit = financialsCalcJs({ total_fee: TOTAL }).platform_profit;
+    const fProfit = financialsCalcJs({
+      total_fee: TOTAL,
+      driver_payout: 8500,
+      has_settlement: true,
+    }).platform_profit;
     assert.notEqual(tProfit, fProfit);
     assert.equal(tProfit, 9200);
-    assert.equal(fProfit, 2000);
+    assert.equal(fProfit, 1500);
   });
 
   it("monthlyBilling generate and invoice-from-bill both exclusive (no self-conflict)", () => {

@@ -31,10 +31,10 @@ interface Financial {
   ar_total: number;
   ar_tax: number;
   ar_grand_total: number;
-  ap_base: number;
-  ap_tailgate: number;
-  ap_frozen: number;
-  ap_total: number;
+  ap_base: number | null;
+  ap_tailgate: number | null;
+  ap_frozen: number | null;
+  ap_total: number | null;
   /** null = trigger shell / not yet calcFinancials (#3C) */
   platform_profit: number | null;
   profit_margin_pct: number | null;
@@ -71,7 +71,7 @@ function monthOptions() {
 
 function n(v: unknown) { return Number(v ?? 0).toLocaleString(); }
 
-/** #3C: NULL profit/margin = pending calc — never Number(null)→0 / ??0 */
+/** #3C/#3F: NULL profit/AP = pending calc — never Number(null)→0 / ??0 */
 function fmtProfitCell(v: unknown) {
   if (v == null || v === "") return "待計算";
   return `$${Number(v).toLocaleString()}`;
@@ -79,6 +79,10 @@ function fmtProfitCell(v: unknown) {
 function fmtMarginCell(v: unknown) {
   if (v == null || v === "") return "—";
   return `${v}%`;
+}
+function fmtApCell(v: unknown) {
+  if (v == null || v === "") return "待計算";
+  return `$${Number(v).toLocaleString()}`;
 }
 
 function StatCard({ label, value, sub, icon: Icon, trend }: {
@@ -192,7 +196,7 @@ export default function FinancialsDashboard() {
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
           <StatCard label="訂單數" value={String(s.total_orders)} icon={BarChart3} />
           <StatCard label="AR 應收" value={`$${n(s.total_ar)}`} sub="廠商收款金額" icon={TrendingUp} trend="up" />
-          <StatCard label="AP 應付" value={`$${n(s.total_ap)}`} sub="司機薪資支出" icon={TrendingDown} trend="down" />
+          <StatCard label="AP 應付" value={`$${n(s.total_ap)}`} sub="已計算列合計（待結算列未列入 SUM）" icon={TrendingDown} trend="down" />
           <StatCard label="平台淨利" value={`$${n(s.total_platform_profit)}`}
             sub="已計算列合計（待計算列未列入 SUM）"
             icon={DollarSign} trend={s.total_platform_profit >= 0 ? "up" : "down"} />
@@ -249,7 +253,7 @@ export default function FinancialsDashboard() {
                       <TableCell><Badge variant="outline" className="text-xs">{f.vehicle_type ?? "-"}</Badge></TableCell>
                       <TableCell className="text-right font-mono text-green-700">${n(f.ar_total)}</TableCell>
                       <TableCell className="text-right font-mono text-xs text-gray-500">${n(f.ar_grand_total)}</TableCell>
-                      <TableCell className="text-right font-mono text-red-600">${n(f.ap_total)}</TableCell>
+                      <TableCell className="text-right font-mono text-red-600">{fmtApCell(f.ap_total)}</TableCell>
                       <TableCell className={`text-right font-mono font-bold ${
                         f.platform_profit == null ? "text-muted-foreground" :
                         Number(f.platform_profit) < 0 ? "text-red-600" : "text-blue-700"

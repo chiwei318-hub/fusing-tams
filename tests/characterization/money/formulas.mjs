@@ -4,8 +4,8 @@
  *
  * Source evidence:
  * - calc_order_finance: artifacts/api-server/src/routes/orders.ts (exclusive)
- * - auto_create_financials: financials.ts — #3C stop fake ×15; profit/revenue/margin NULL until calcFinancials
- * - calcFinancials (JS): financials.ts — exclusive AR tax; platform_profit = AR−AP (unchanged by #3C)
+ * - auto_create_financials: financials.ts — #3C+#3F: profit/AP NULL until verified calcFinancials
+ * - calcFinancials (JS): financials.ts — exclusive AR tax; verified settlement → AP=payout; else NULL; profit=AR−AP when AP known
  * - monthlyBilling generate: exclusive
  * - monthlyBilling invoice-from-bill: exclusive on order sum (tax_engine)
  * - autoInvoice: exclusive
@@ -38,13 +38,13 @@ export function orderFinanceTrigger({ total_fee, driver_pay_rate, rate_per_trip 
   return { vat_amount: vat, cost_amount: rate, profit_amount: profit };
 }
 
-/** Production: auto_create_financials after #3C — withhold fake ×15 profit */
+/** Production: auto_create_financials after #3C+#3F — withhold fake ×15 profit and ×80 AP */
 export function financialsAutoCreateTrigger({ total_fee }) {
   const t = Number(total_fee) || 0;
   return {
     ar_total: t,
     ar_grand_total: t * 1.05,
-    ap_total: t * 0.8, // #3F still hardcoded; unchanged this round
+    ap_total: null, // #3F: no fee×0.80
     platform_profit: null,
     platform_revenue: null,
     profit_margin_pct: null,
@@ -64,16 +64,45 @@ export function financialsAutoCreateTriggerLegacy15({ total_fee }) {
   };
 }
 
-export function financialsCalcJs({ total_fee: ar_total, ap_base = 0, need_tailgate = false, need_hydraulic = false }) {
+/**
+ * Writer B after #3F:
+ * verified settlement (row exists, not cancelled) → AP from driver_payout (+ equip literals)
+ * else → AP/profit NULL (no ×80)
+ */
+export function financialsCalcJs({
+  total_fee: ar_total,
+  driver_payout = null,
+  has_settlement = false,
+  settlement_cancelled = false,
+  need_tailgate = false,
+  need_hydraulic = false,
+}) {
   const ar = Number(ar_total) || 0;
   const ar_tax = Math.round(ar * 0.05 * 100) / 100;
   const ar_grand = ar + ar_tax;
+  const verified = has_settlement && !settlement_cancelled;
+
+  if (!verified) {
+    return {
+      ar_total: ar,
+      ar_tax,
+      ar_grand_total: ar_grand,
+      ap_base: null,
+      ap_total: null,
+      platform_revenue: null,
+      platform_cost: null,
+      platform_profit: null,
+      profit_margin_pct: null,
+      usedFallback80: false,
+      source: "NO_VERIFIED_SETTLEMENT",
+    };
+  }
+
   const ap_tailgate = need_tailgate ? 500 : 0;
   const ap_other = need_hydraulic ? 800 : 0;
-  let base = Number(ap_base) || 0;
-  if (base <= 0) base = Math.round(ar * 0.8);
+  const base = Number(driver_payout ?? 0); // verified zero allowed
   const ap_total = base + ap_tailgate + ap_other;
-  const platform_revenue = ar; // Writer B: full AR (≠ trigger fee×0.15)
+  const platform_revenue = ar;
   const platform_cost = ap_total;
   const platform_profit = ar - ap_total;
   const profit_margin_pct = ar > 0 ? Math.round((platform_profit / ar) * 1000) / 10 : 0;
@@ -87,6 +116,8 @@ export function financialsCalcJs({ total_fee: ar_total, ap_base = 0, need_tailga
     platform_cost,
     platform_profit,
     profit_margin_pct,
+    usedFallback80: false,
+    source: "SETTLEMENT_DRIVER_PAYOUT",
   };
 }
 
@@ -103,7 +134,7 @@ export function financialsPendingProfitCount(rows) {
   return rows.filter((r) => r.platform_profit == null).length;
 }
 
-/** Dashboard row cell policy #3C — never Number(null)→0 */
+/** Dashboard row cell policy #3C/#3F — never Number(null)→0 */
 export function financialsFmtProfitCell(v) {
   if (v == null || v === "") return "待計算";
   return `$${Number(v).toLocaleString()}`;
@@ -112,6 +143,84 @@ export function financialsFmtProfitCell(v) {
 export function financialsFmtMarginCell(v) {
   if (v == null || v === "") return "—";
   return `${v}%`;
+}
+
+export function financialsFmtApCell(v) {
+  if (v == null || v === "") return "待計算";
+  return `$${Number(v).toLocaleString()}`;
+}
+
+/**
+ * Writer B AP priority (#3F AFTER repair).
+ * VERIFIED_SETTLEMENT → driver_payout (+equip); else NULL. No fee×0.80.
+ */
+export function financialsApCalc({
+  total_fee: ar_total,
+  driver_payout = null,
+  has_settlement = false,
+  settlement_cancelled = false,
+  need_tailgate = false,
+  need_hydraulic = false,
+}) {
+  const verified = has_settlement && !settlement_cancelled;
+  if (!verified) {
+    return {
+      ap_base: null,
+      ap_tailgate: null,
+      ap_hydraulic: null,
+      ap_total: null,
+      usedFallback80: false,
+      source: "NO_VERIFIED_SETTLEMENT",
+    };
+  }
+  const ap_base = Number(driver_payout ?? 0);
+  const ap_tailgate = need_tailgate ? 500 : 0;
+  const ap_hydraulic = need_hydraulic ? 800 : 0;
+  const ap_total = ap_base + ap_tailgate + ap_hydraulic;
+  return {
+    ap_base,
+    ap_tailgate,
+    ap_hydraulic,
+    ap_total,
+    usedFallback80: false,
+    source: "SETTLEMENT_DRIVER_PAYOUT",
+  };
+}
+
+/** Legacy pre-#3F AP calc (documentation / regression only) */
+export function financialsApCalcLegacy80({
+  total_fee: ar_total,
+  driver_payout = null,
+  need_tailgate = false,
+  need_hydraulic = false,
+}) {
+  const ar = Number(ar_total) || 0;
+  let ap_base = Number(driver_payout ?? 0);
+  const usedFallback80 = !(ap_base > 0);
+  if (usedFallback80) ap_base = Math.round(ar * 0.8);
+  const ap_tailgate = need_tailgate ? 500 : 0;
+  const ap_hydraulic = need_hydraulic ? 800 : 0;
+  const ap_total = ap_base + ap_tailgate + ap_hydraulic;
+  return {
+    ap_base,
+    ap_tailgate,
+    ap_hydraulic,
+    ap_total,
+    usedFallback80,
+    source: usedFallback80 ? "FALLBACK_80" : "SETTLEMENT_DRIVER_PAYOUT",
+  };
+}
+
+/** Trigger Writer A AP after #3F — NULL until calcFinancials */
+export function financialsTriggerAp({ total_fee }) {
+  void total_fee;
+  return { ap_total: null, source: "NULL_PENDING_SETTLEMENT", includes_equipment: false };
+}
+
+/** Pre-#3F trigger AP (historical documentation) */
+export function financialsTriggerApLegacy80({ total_fee }) {
+  const t = Number(total_fee) || 0;
+  return { ap_total: t * 0.8, source: "HARDCODED_80", includes_equipment: false };
 }
 
 export function monthlyBillingGenerateExclusive(total) {

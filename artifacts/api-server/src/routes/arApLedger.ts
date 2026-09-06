@@ -3,6 +3,11 @@
  * AR = 向廠商/客戶收取的總額
  * AP = 給司機的分帳（含尾門全額補助）
  * 每單完成後自動觸發，後台可手動補跑，並提供當月 Excel 導出
+ *
+ * MONEY #3F SCOPE NOTE (2026-09-06):
+ * order_financials.ap_total 已改為 verified settlement → payout，否則 NULL。
+ * 本檔 ar_ap_records 仍為 LEGACY fee×80% fallback（欄位 NOT NULL，schema change 未核准）。
+ * BACKLOG: AR_AP_RECORDS_SCHEMA_BLOCKED_LEGACY_80 — 與 order_financials 並存時數字可能不一致；不可當可信 AP SSoT。
  */
 import { Router } from "express";
 import { pool } from "@workspace/db";
@@ -64,6 +69,7 @@ export async function generateArApForOrder(orderId: number): Promise<void> {
   const o = rows[0];
 
   const arAmount   = Number(o.ar_amount);
+  // LEGACY_80 (AR_AP_RECORDS_SCHEMA_BLOCKED_LEGACY_80): unverified estimate — NOT order_financials SSoT
   let apDriver     = Number(o.driver_payout);
   if (apDriver <= 0) apDriver = Math.round(arAmount * 0.80);
 
@@ -120,7 +126,14 @@ arApRouter.get("/ar-ap/records", async (req, res) => {
       LIMIT 500
     `, params);
 
-    res.json({ ok: true, records: rows });
+    res.json({
+      ok: true,
+      records: rows,
+      // #3F reduced scope: ledger AP may still use fee×80 — not order_financials SSoT
+      ap_quality: "LEGACY_80_ESTIMATE",
+      ap_disclaimer:
+        "ar_ap_records AP may include fee×80% fallback (AR_AP_RECORDS_SCHEMA_BLOCKED_LEGACY_80). Prefer order_financials for verified AP.",
+    });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -150,7 +163,14 @@ arApRouter.get("/ar-ap/monthly-summary", async (req, res) => {
     `, [target]);
 
     const summary = rows[0];
-    res.json({ ok: true, month: target, summary });
+    res.json({
+      ok: true,
+      month: target,
+      summary,
+      ap_quality: "LEGACY_80_ESTIMATE",
+      ap_disclaimer:
+        "ar_ap_records AP may include fee×80% fallback (AR_AP_RECORDS_SCHEMA_BLOCKED_LEGACY_80). Prefer order_financials for verified AP.",
+    });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }

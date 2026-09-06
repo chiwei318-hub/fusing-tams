@@ -13,7 +13,10 @@
 | 3C-agg | Financials monthly SUM/Excel **AGGREGATE_COMPLETENESS_GAP** | Open | SUM ignores NULL profit rows with no pending/PARTIAL indicator; follow-up report-layer | Medium |
 | 3D | `PLATFORM_COMMISSION_RATE` SSoT (prerequisite to restore OCR auto-post) | Deferred | Missing formal platform rate for OCR path | High |
 | 3E | Historical OCR AR / driver_earnings written under inverted platform semantic | Deferred | Audit only; no bulk rewrite | Medium |
-| 3F | AP ×80% proxy (`order_financials` / arAp) | Deferred | Not real AP; separate from commission | Medium |
+| 3F | AP ×80% on `order_financials` | **REPAIR Done (reduced scope)** | trigger/calcFinancials: verified settlement → payout else NULL; **no ×80**; no schema change | Medium |
+| 3F-ledger | `ar_ap_records` still fee×80 | **AR_AP_RECORDS_SCHEMA_BLOCKED_LEGACY_80** | NOT NULL columns → NULL AP needs **approved schema migration**; dual-table AP divergence until then | High |
+| 3F-name | `order_settlements.commission_rate` → future `platform_deduction_rate` rename | Deferred REFACTOR | SEMANTIC_COLLISION **OPEN**; no migration this round | Medium |
+| 3F-equip | tailgate 500 / hydraulic 800 AP add-ons | Open | UNVERIFIED_DEFAULT on verified financials path | Low |
 | 4 | enterprise create dual-write `orderStatus` | **Done** | — | Low |
 
 #4 evidence: `enterprise.ts` single + bulk inserts use `prepareStatusWrite("pending")`; test `tests/characterization/status/enterprise-create.test.mjs`.

@@ -27,12 +27,12 @@ const dashSrc = readFileSync(
 );
 
 describe("MONEY #3C REPAIR A: trigger inserts NULL profit (not ×15)", () => {
-  it("fee=10000 → profit/revenue/margin NULL; ap still ×80", () => {
+  it("fee=10000 → profit/revenue/margin NULL; ap also NULL (#3F)", () => {
     const r = financialsAutoCreateTrigger({ total_fee: 10000 });
     assert.equal(r.platform_profit, null);
     assert.equal(r.platform_revenue, null);
     assert.equal(r.profit_margin_pct, null);
-    assert.equal(r.ap_total, 8000);
+    assert.equal(r.ap_total, null);
     assert.equal(r.ar_total, 10000);
   });
 
@@ -47,18 +47,22 @@ describe("MONEY #3C REPAIR A: trigger inserts NULL profit (not ×15)", () => {
   });
 });
 
-describe("MONEY #3C REPAIR B: Writer B AR−AP unchanged", () => {
-  it("recalc AR=10000 AP=8000 → profit 2000", () => {
-    const r = financialsCalcJs({ total_fee: 10000 });
-    assert.equal(r.platform_profit, 2000);
-    assert.equal(r.profit_margin_pct, 20);
+describe("MONEY #3C REPAIR B: Writer B AR−AP when verified settlement", () => {
+  it("recalc AR=10000 verified AP=8500 → profit 1500", () => {
+    const r = financialsCalcJs({
+      total_fee: 10000,
+      driver_payout: 8500,
+      has_settlement: true,
+    });
+    assert.equal(r.platform_profit, 1500);
+    assert.equal(r.profit_margin_pct, 15);
   });
 
-  it("calcFinancials still AR−AP; still has AP ×80 fallback", () => {
+  it("calcFinancials still AR−AP; #3F removed AP ×80 fallback", () => {
     const start = finSrc.indexOf("async function calcFinancials");
-    const calc = finSrc.slice(start, start + 2500);
+    const calc = finSrc.slice(start, start + 4500);
     assert.match(calc, /platform_profit\s*=\s*ar_total\s*-\s*ap_total/);
-    assert.match(calc, /Math\.round\(ar_total\s*\*\s*0\.80\)/);
+    assert.doesNotMatch(calc, /Math\.round\(ar_total\s*\*\s*0\.80\)/);
   });
 });
 
@@ -82,11 +86,14 @@ describe("MONEY #3C REPAIR D: aggregate NULL behavior (record only)", () => {
   it("SUM skips NULL; mixed known+pending → AGGREGATE_COMPLETENESS_GAP", () => {
     const rows = [
       financialsAutoCreateTrigger({ total_fee: 10000 }), // pending
-      financialsCalcJs({ total_fee: 10000 }), // 2000
+      financialsCalcJs({
+        total_fee: 10000,
+        driver_payout: 8500,
+        has_settlement: true,
+      }), // profit 1500
     ];
     assert.equal(financialsPendingProfitCount(rows), 1);
-    assert.equal(financialsMonthlyProfitSum(rows), 2000);
-    // Would look complete if UI only shows $2000 without pending count
+    assert.equal(financialsMonthlyProfitSum(rows), 1500);
     assert.ok(financialsPendingProfitCount(rows) > 0);
   });
 });
@@ -113,11 +120,15 @@ describe("MONEY #3C isolation: canonical GP / Case D improved for NEW rows", () 
     assert.equal(fin.platform_profit, null);
   });
 
-  it("known cost GP 9200 still ≠ recalc 2000 (concepts remain separate)", () => {
+  it("known cost GP 9200 still ≠ verified settlement AR−AP 1500 (concepts remain separate)", () => {
     const gp = orderFinanceTrigger({ total_fee: 10000, driver_pay_rate: 800 }).profit_amount;
-    const b = financialsCalcJs({ total_fee: 10000 }).platform_profit;
+    const b = financialsCalcJs({
+      total_fee: 10000,
+      driver_payout: 8500,
+      has_settlement: true,
+    }).platform_profit;
     assert.equal(gp, 9200);
-    assert.equal(b, 2000);
+    assert.equal(b, 1500);
     assert.notEqual(gp, b);
   });
 });

@@ -66,6 +66,7 @@ export async function ensureFinancialsTables(): Promise<void> {
 
   // DB 觸發器：訂單 → delivered 時自動產生財務清算
   // MONEY #3C: stop fake ×15% profit — platform_profit/revenue/margin = NULL until calcFinancials
+  // MONEY #3F: stop fake ×80% AP — ap_total = NULL until verified settlement via calcFinancials
   await pool.query(`
     CREATE OR REPLACE FUNCTION auto_create_financials()
     RETURNS TRIGGER AS $$
@@ -82,7 +83,7 @@ export async function ensureFinancialsTables(): Promise<void> {
           TO_CHAR(NOW(), 'YYYY-MM'),
           COALESCE(NEW.total_fee, 0),
           COALESCE(NEW.total_fee, 0) * 1.05,
-          COALESCE((NEW.total_fee::numeric * 0.80), 0),
+          NULL,
           NULL,
           NULL,
           NULL
@@ -106,6 +107,13 @@ export async function ensureFinancialsTables(): Promise<void> {
 
 // ── 內部工具：依單計算財務分拆 ────────────────────────────────────────────────
 
+/**
+ * MONEY #3F — VERIFIED_SETTLEMENT_CRITERIA (best available; no formal approve flag):
+ *   order_settlements row EXISTS for order_id
+ *   AND payment_status IS DISTINCT FROM 'cancelled'
+ * Tag: SETTLEMENT_VERIFICATION_STATE_MISSING (no approved/confirmed column) → proxy only.
+ * Forbidden: fee×80% fallback; cost_amount as AP; inventing new settlement states.
+ */
 async function calcFinancials(orderId: number): Promise<void> {
   const { rows } = await pool.query(`
     SELECT
@@ -117,7 +125,9 @@ async function calcFinancials(orderId: number): Promise<void> {
       o.need_tailgate,
       o.need_hydraulic_pallet,
       TO_CHAR(COALESCE(o.completed_at, o.created_at), 'YYYY-MM') AS period,
-      COALESCE(os.driver_payout, 0)::numeric AS ap_base
+      os.id                               AS settlement_id,
+      os.payment_status                   AS settlement_payment_status,
+      os.driver_payout::numeric           AS driver_payout
     FROM orders o
     LEFT JOIN order_settlements os ON os.order_id = o.id
     WHERE o.id = $1 LIMIT 1
@@ -129,17 +139,33 @@ async function calcFinancials(orderId: number): Promise<void> {
   const ar_tax       = Math.round(ar_total * 0.05 * 100) / 100;
   const ar_grand     = ar_total + ar_tax;
 
-  const ap_tailgate  = (o.need_tailgate === true || o.need_tailgate === "true") ? 500 : 0;
-  const ap_frozen    = 0;
-  const ap_other     = (o.need_hydraulic_pallet === true || o.need_hydraulic_pallet === "true") ? 800 : 0;
-  let ap_base        = Number(o.ap_base ?? 0);
-  if (ap_base <= 0) ap_base = Math.round(ar_total * 0.80);
-  const ap_total     = ap_base + ap_tailgate + ap_frozen + ap_other;
+  const verifiedSettlement =
+    o.settlement_id != null &&
+    o.settlement_payment_status !== "cancelled";
 
-  const platform_revenue = ar_total;
-  const platform_cost    = ap_total;
-  const platform_profit  = ar_total - ap_total;
-  const profit_margin_pct = ar_total > 0 ? Math.round(platform_profit / ar_total * 1000) / 10 : 0;
+  let ap_base: number | null = null;
+  let ap_tailgate: number | null = null;
+  let ap_frozen: number | null = null;
+  let ap_other: number | null = null;
+  let ap_total: number | null = null;
+  let platform_revenue: number | null = null;
+  let platform_cost: number | null = null;
+  let platform_profit: number | null = null;
+  let profit_margin_pct: number | null = null;
+
+  if (verifiedSettlement) {
+    // Trust GENERATED driver_payout including verified zero (do not treat 0 as missing)
+    ap_base = Number(o.driver_payout ?? 0);
+    ap_tailgate = (o.need_tailgate === true || o.need_tailgate === "true") ? 500 : 0;
+    ap_frozen = 0;
+    ap_other = (o.need_hydraulic_pallet === true || o.need_hydraulic_pallet === "true") ? 800 : 0;
+    ap_total = ap_base + ap_tailgate + ap_frozen + ap_other;
+    platform_revenue = ar_total;
+    platform_cost = ap_total;
+    platform_profit = ar_total - ap_total;
+    profit_margin_pct = ar_total > 0 ? Math.round(platform_profit / ar_total * 1000) / 10 : 0;
+  }
+  // else: no verified settlement → AP + profit remain NULL (no eighty-percent fee fallback)
 
   await pool.query(`
     INSERT INTO order_financials (

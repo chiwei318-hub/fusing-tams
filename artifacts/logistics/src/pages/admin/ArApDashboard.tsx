@@ -149,6 +149,9 @@ export default function ArApDashboard() {
           <div>
             <h1 className="text-2xl font-bold">AR/AP 財務清算</h1>
             <p className="text-sm text-muted-foreground">應收帳款（AR）× 應付帳款（AP）一條龍清算</p>
+            <p className="text-xs text-amber-700 mt-1">
+              注意：本頁 AP 可能含 fee×80% 估算（LEGACY），與「財務清算」verified settlement AP 可能不一致；正式 AP 請以 order_financials 為準。
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-2">

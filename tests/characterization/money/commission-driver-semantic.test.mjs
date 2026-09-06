@@ -128,12 +128,13 @@ describe("MONEY #3A isolation: GP / Driver Pay / reports70 / financials15 unchan
     assert.match(src, /cost_status/);
   });
 
-  it("financials trigger no longer writes ×15; Writer B AR−AP still 2000", () => {
+  it("financials trigger no longer writes ×15; no settlement → profit NULL (#3F)", () => {
     const r = financialsAutoCreateTrigger({ total_fee: 10000 });
     assert.equal(r.platform_profit, null);
+    assert.equal(r.ap_total, null);
     const src = readSrc("artifacts/api-server/src/routes/financials.ts");
     const trig = src.slice(src.indexOf("auto_create_financials"), src.indexOf("async function calcFinancials"));
     assert.doesNotMatch(trig, /COALESCE\(NEW\.total_fee,\s*0\)\s*\*\s*0\.15/);
-    assert.equal(financialsCalcJs({ total_fee: 10000 }).platform_profit, 2000);
+    assert.equal(financialsCalcJs({ total_fee: 10000 }).platform_profit, null);
   });
 });
