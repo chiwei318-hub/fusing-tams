@@ -16,12 +16,14 @@ export function round2(n) {
   return Math.round(Number(n) * 100) / 100;
 }
 
-/** Production: calc_order_finance trigger — exclusive */
+/** Production: calc_order_finance trigger — exclusive VAT; #2dA unknown cost → null */
 export function orderFinanceTrigger({ total_fee, driver_pay_rate, rate_per_trip = 0 }) {
   const rate = (() => {
     const d = Number(driver_pay_rate);
-    if (driver_pay_rate != null && !Number.isNaN(d) && d !== 0) return d;
-    return Number(rate_per_trip) || 0;
+    if (driver_pay_rate != null && !Number.isNaN(d) && d > 0) return d;
+    const t = Number(rate_per_trip);
+    if (rate_per_trip != null && !Number.isNaN(t) && t > 0) return t;
+    return null;
   })();
 
   if (total_fee == null || !(Number(total_fee) > 0)) {
@@ -29,7 +31,9 @@ export function orderFinanceTrigger({ total_fee, driver_pay_rate, rate_per_trip 
   }
   const total = Number(total_fee);
   const vat = round2(total * 0.05);
-  // LOCKED: profit = net - direct cost; VAT not subtracted
+  if (rate == null) {
+    return { vat_amount: vat, cost_amount: null, profit_amount: null };
+  }
   const profit = round2(total - rate);
   return { vat_amount: vat, cost_amount: rate, profit_amount: profit };
 }
@@ -225,4 +229,74 @@ export function reportGrossMarginAggregate(orders, { franchise_cost = 0 } = {}) 
     gross_profit,
     gross_margin_pct,
   };
+}
+
+/**
+ * MONEY #2dA — mirror of calc_order_finance cost lookup (AFTER repair).
+ * Valid: driver_pay_rate > 0 else rate_per_trip > 0 else NULL (never COALESCE to 0).
+ */
+export function calcOrderFinanceCostLookup({
+  route_prefix = null,
+  rate_row = undefined,
+  total_fee = null,
+} = {}) {
+  let v_rate = null;
+  if (rate_row != null && rate_row !== false) {
+    const dpr = rate_row.driver_pay_rate;
+    const rpt = rate_row.rate_per_trip;
+    if (dpr != null && Number(dpr) > 0) v_rate = Number(dpr);
+    else if (rpt != null && Number(rpt) > 0) v_rate = Number(rpt);
+    else v_rate = null;
+  }
+
+  const fee = total_fee == null ? null : Number(total_fee);
+  let profit_amount = null;
+  if (fee != null && fee > 0 && v_rate != null) {
+    profit_amount = Math.round((fee - v_rate) * 100) / 100;
+  }
+  return {
+    route_prefix: route_prefix ?? null,
+    cost_amount: v_rate,
+    profit_amount,
+    used_coalesce_zero: false,
+    semantic_if_zero:
+      v_rate == null
+        ? "UNKNOWN_NULL"
+        : Number(v_rate) === 0
+          ? "SHOULD_NOT_HAPPEN"
+          : "KNOWN",
+  };
+}
+
+/** #3B report: cost_amount=0 counts as known (IS NOT NULL) — CURRENT */
+export function reportCountsCostZeroAsKnown(cost_amount) {
+  const isNull = cost_amount == null;
+  return {
+    cost_unknown: isNull,
+    cost_known: !isNull,
+    potential_false_known: !isNull && Number(cost_amount) === 0,
+  };
+}
+
+/** sheetsExport fmtMoneyNullable policy (#2dA display):
+ * null → blank; numeric 0 → "0"; never !value / || 0
+ */
+export function sheetsFmtMoneyNullable(v) {
+  if (v == null) return "";
+  return Number(v).toFixed(0);
+}
+
+/** Legacy generic fmt used for COALESCE'd columns — null still "0" */
+export function sheetsFmtLegacy(v) {
+  if (v == null) return "0";
+  return Number(v).toFixed(0);
+}
+
+/**
+ * firebaseSync nullableMoney (#2dA): NULL stays null; never Number(null)→0 / NaN→0
+ */
+export function firebaseNullableMoney(v) {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isNaN(n) ? null : n;
 }

@@ -132,3 +132,19 @@ Full write-up: [`REPORT-70-COST-SSOT-AUDIT.md`](./REPORT-70-COST-SSOT-AUDIT.md).
 | Shadow fee=10000 cost=800 rate=null | Actual cost 800; report cost **7000**; canonical GP **9200**; report GP **3000** |
 | financials ×15 / AP ×80 | Code **ISOLATED** from R70; coexistence = **MULTIPLE_FINANCIAL_TRUTH** |
 | Note | receipts platform misuse fixed in `40f0a62`; **#3B REPAIR**: gross-margin now uses `cost_amount`/`profit_amount`; `COALESCE(...,70)` **removed** (see REPORT-70-COST-REPAIR.md) |
+
+---
+
+## Supplement — MONEY #2d Cost Zero vs Unknown (2026-09-06, READ-ONLY)
+
+Full write-up: [`COST-ZERO-SSOT-AUDIT.md`](./COST-ZERO-SSOT-AUDIT.md).
+
+| Item | Evidence |
+|------|----------|
+| Writer formula | `COALESCE(NULLIF(driver_pay_rate,0), rate_per_trip, 0)` in `calc_order_finance` |
+| Missing prefix/rate | **cost_amount → 0** (not NULL) |
+| Schema | `DEFAULT 0` |
+| fee=10000 unknown cost | **profit_amount=10000** → FALSE_HIGH_GROSS_PROFIT |
+| Report (`ae9ddda`) | `cost_amount=0` is **known** → **POTENTIAL_FALSE_KNOWN** |
+| Distinguish 0 meanings today | **NO** |
+| Production change this audit | **0** |

@@ -101,12 +101,12 @@ describe("MONEY #3A: receipts no longer treat driver rate as platform commission
 });
 
 describe("MONEY #3A isolation: GP / Driver Pay / reports70 / financials15 unchanged", () => {
-  it("Gross Profit still total_fee - cost; no commission", () => {
+  it("Gross Profit still total_fee - cost when known; unknown → null (#2dA)", () => {
     const r = orderFinanceTrigger({ total_fee: 10000, driver_pay_rate: 800 });
     assert.equal(r.profit_amount, 9200);
-    const ordersSrc = readSrc("artifacts/api-server/src/routes/orders.ts");
-    // profit line must not multiply commission
-    assert.match(ordersSrc, /profit_amount/);
+    const missing = orderFinanceTrigger({ total_fee: 10000, driver_pay_rate: 0, rate_per_trip: 0 });
+    assert.equal(missing.cost_amount, null);
+    assert.equal(missing.profit_amount, null);
   });
 
   it("Driver Pay route rate path still independent (cost from driver_pay_rate)", () => {

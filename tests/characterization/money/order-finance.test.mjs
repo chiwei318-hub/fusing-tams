@@ -43,6 +43,13 @@ describe("characterization: calc_order_finance (exclusive VAT; profit no VAT ded
     assert.equal(r.cost_amount, 900);
   });
 
+  it("both rates missing/0 → cost NULL profit NULL (#2dA)", () => {
+    const r = orderFinanceTrigger({ total_fee: 10000, driver_pay_rate: 0, rate_per_trip: 0 });
+    assert.equal(r.cost_amount, null);
+    assert.equal(r.profit_amount, null);
+    assert.equal(r.vat_amount, 500);
+  });
+
   it("total_fee=2100, driver_pay_rate=800", () => {
     const r = orderFinanceTrigger({ total_fee: 2100, driver_pay_rate: 800 });
     assert.equal(r.cost_amount, 800);

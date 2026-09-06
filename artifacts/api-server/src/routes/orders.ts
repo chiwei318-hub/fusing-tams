@@ -59,11 +59,12 @@ ensureOrderColumns().catch(console.error);
 ensureOrderFinanceColumns().catch(console.error);
 
 // ─── DB Trigger: auto-calculate order finance fields ──────────────────────────
-// cost_amount   = COALESCE(driver_pay_rate, rate_per_trip)  from route_prefix_rates
+// MONEY #2dA: unknown rate → cost_amount NULL, profit_amount NULL (never COALESCE to 0).
+// cost_amount   = valid driver_pay_rate > 0, else valid rate_per_trip > 0, else NULL
 // vat_amount    = total_fee × 0.05（未稅外加；total_fee = net）
-// profit_amount = total_fee - cost_amount
+// profit_amount = total_fee - cost_amount only when both known; else NULL
 //   LOCKED: VAT 不二次扣進 gross_profit；≠ commission / ≠ financials ×15%
-// fleet_payout  = rate × (1 - commission_rate / 100)  [車隊單才計算]
+// fleet_payout  = rate × (1 - commission_rate / 100)  [車隊單才計算；未知 rate → NULL]
 async function ensureOrderFinanceTrigger() {
   // 防禦性保證：無論載入順序為何，這裡自己確保前置表/欄位存在
   await pool.query(`
@@ -81,43 +82,54 @@ async function ensureOrderFinanceTrigger() {
     CREATE OR REPLACE FUNCTION calc_order_finance()
     RETURNS TRIGGER AS $$
     DECLARE
-      v_rate   NUMERIC := 0;
+      v_rate   NUMERIC := NULL;
       v_comm   NUMERIC := 0;
       v_vat    NUMERIC;
     BEGIN
-      -- 從 route_prefix_rates 取得費率（優先 driver_pay_rate，fallback rate_per_trip）
-      SELECT COALESCE(NULLIF(driver_pay_rate, 0), rate_per_trip, 0)
+      -- 有效費率：driver_pay_rate > 0，否則 rate_per_trip > 0；否則 UNKNOWN（NULL）
+      -- 禁止 COALESCE(...,0) 把缺費率寫成 0
+      SELECT COALESCE(NULLIF(driver_pay_rate, 0), NULLIF(rate_per_trip, 0))
         INTO v_rate
         FROM route_prefix_rates
        WHERE prefix = NEW.route_prefix
        LIMIT 1;
 
-      v_rate := COALESCE(v_rate, 0);
+      -- 無 row 時 v_rate 維持 NULL；<=0 亦視為 UNKNOWN
+      IF v_rate IS NOT NULL AND v_rate <= 0 THEN
+        v_rate := NULL;
+      END IF;
 
-      -- 銷項稅：未稅外加 5%（total_fee = net）；毛利不扣 VAT（LOCKED gross_profit）
+      NEW.cost_amount := v_rate;
+
+      -- 銷項稅：未稅外加 5%（與成本是否已知無關）
       IF NEW.total_fee IS NOT NULL AND NEW.total_fee > 0 THEN
         v_vat := ROUND((NEW.total_fee * 0.05)::NUMERIC, 2);
-        NEW.vat_amount    := v_vat;
-        NEW.cost_amount   := v_rate;
-        NEW.profit_amount := ROUND((NEW.total_fee - v_rate)::NUMERIC, 2);
+        NEW.vat_amount := v_vat;
+        IF v_rate IS NOT NULL THEN
+          NEW.profit_amount := ROUND((NEW.total_fee - v_rate)::NUMERIC, 2);
+        ELSE
+          NEW.profit_amount := NULL;
+        END IF;
       ELSE
-        -- 無收費（蝦皮外包單）：只記成本，不算損益
         NEW.vat_amount    := 0;
-        NEW.cost_amount   := v_rate;
         NEW.profit_amount := NULL;
       END IF;
 
       -- 車隊結算（有 fusingao_fleet_id 才計算）
       IF NEW.fusingao_fleet_id IS NOT NULL THEN
-        SELECT COALESCE(commission_rate, 0)
-          INTO v_comm
-          FROM fusingao_fleets
-         WHERE id = NEW.fusingao_fleet_id
-         LIMIT 1;
+        IF v_rate IS NULL THEN
+          NEW.fleet_payout := NULL;
+        ELSE
+          SELECT COALESCE(commission_rate, 0)
+            INTO v_comm
+            FROM fusingao_fleets
+           WHERE id = NEW.fusingao_fleet_id
+           LIMIT 1;
 
-        NEW.fleet_payout := ROUND(
-          (v_rate * (1 - COALESCE(v_comm, 0) / 100))::NUMERIC, 2
-        );
+          NEW.fleet_payout := ROUND(
+            (v_rate * (1 - COALESCE(v_comm, 0) / 100))::NUMERIC, 2
+          );
+        END IF;
       ELSE
         NEW.fleet_payout := 0;
       END IF;
@@ -136,16 +148,19 @@ async function ensureOrderFinanceTrigger() {
       FOR EACH ROW EXECUTE FUNCTION calc_order_finance();
   `);
 
-  // 3. 僅填缺：不覆寫已有 vat/profit（凍結歷史；新公式只影響未來寫入／缺值列）
+  // 3. 僅填缺：不覆寫已有非 NULL cost；不把歷史 cost=0 猜成 NULL；不把 UNKNOWN 寫成 0
+  //    不對 cost=0 歷史列計算 profit=total_fee（避免 FALSE_HIGH）
   const { rowCount } = await pool.query(`
     UPDATE orders o
-       SET cost_amount   = COALESCE(
-                             NULLIF(o.cost_amount, 0),
-                             (SELECT COALESCE(NULLIF(pr.driver_pay_rate,0), pr.rate_per_trip, 0)
-                                FROM route_prefix_rates pr
-                               WHERE pr.prefix = o.route_prefix
-                               LIMIT 1),
-                             0),
+       SET cost_amount   = CASE
+                             WHEN o.cost_amount IS NULL THEN (
+                               SELECT COALESCE(NULLIF(pr.driver_pay_rate, 0), NULLIF(pr.rate_per_trip, 0))
+                                 FROM route_prefix_rates pr
+                                WHERE pr.prefix = o.route_prefix
+                                LIMIT 1
+                             )
+                             ELSE o.cost_amount
+                           END,
            vat_amount    = CASE
                              WHEN o.vat_amount IS NULL AND o.total_fee > 0
                              THEN ROUND((o.total_fee * 0.05)::NUMERIC, 2)
@@ -154,30 +169,35 @@ async function ensureOrderFinanceTrigger() {
                              ELSE o.vat_amount
                            END,
            profit_amount = CASE
-                             WHEN o.profit_amount IS NULL AND o.total_fee > 0
-                             THEN ROUND((
-                               o.total_fee
-                               - COALESCE(
-                                   NULLIF(o.cost_amount, 0),
-                                   (SELECT COALESCE(NULLIF(pr.driver_pay_rate,0), pr.rate_per_trip, 0)
-                                      FROM route_prefix_rates pr WHERE pr.prefix = o.route_prefix LIMIT 1),
-                                   0)
-                             )::NUMERIC, 2)
-                             ELSE o.profit_amount
+                             WHEN o.profit_amount IS NOT NULL THEN o.profit_amount
+                             WHEN o.total_fee IS NULL OR o.total_fee <= 0 THEN NULL
+                             WHEN o.cost_amount IS NOT NULL AND o.cost_amount > 0 THEN
+                               ROUND((o.total_fee - o.cost_amount)::NUMERIC, 2)
+                             WHEN o.cost_amount IS NULL THEN
+                               ROUND((o.total_fee - (
+                                 SELECT COALESCE(NULLIF(pr.driver_pay_rate, 0), NULLIF(pr.rate_per_trip, 0))
+                                   FROM route_prefix_rates pr
+                                  WHERE pr.prefix = o.route_prefix
+                                  LIMIT 1
+                               ))::NUMERIC, 2)
+                             ELSE NULL
                            END,
            fleet_payout  = CASE
-                             WHEN o.fusingao_fleet_id IS NOT NULL AND (o.fleet_payout IS NULL OR o.fleet_payout = 0) THEN
-                               ROUND((
-                                 COALESCE((SELECT COALESCE(NULLIF(pr.driver_pay_rate,0), pr.rate_per_trip, 0)
-                                             FROM route_prefix_rates pr WHERE pr.prefix = o.route_prefix LIMIT 1), 0)
-                                 * (1 - COALESCE((SELECT commission_rate FROM fusingao_fleets f WHERE f.id = o.fusingao_fleet_id LIMIT 1), 0) / 100)
-                               )::NUMERIC, 2)
-                             ELSE COALESCE(o.fleet_payout, 0)
+                             WHEN o.fusingao_fleet_id IS NULL THEN COALESCE(o.fleet_payout, 0)
+                             WHEN o.fleet_payout IS NOT NULL AND o.fleet_payout <> 0 THEN o.fleet_payout
+                             ELSE ROUND((
+                               COALESCE(
+                                 NULLIF(o.cost_amount, 0),
+                                 (SELECT COALESCE(NULLIF(pr.driver_pay_rate, 0), NULLIF(pr.rate_per_trip, 0))
+                                    FROM route_prefix_rates pr WHERE pr.prefix = o.route_prefix LIMIT 1)
+                               )
+                               * (1 - COALESCE((SELECT commission_rate FROM fusingao_fleets f WHERE f.id = o.fusingao_fleet_id LIMIT 1), 0) / 100)
+                             )::NUMERIC, 2)
                            END
-     WHERE (o.vat_amount IS NULL OR o.profit_amount IS NULL OR o.cost_amount IS NULL OR o.cost_amount = 0)
+     WHERE (o.vat_amount IS NULL OR o.profit_amount IS NULL OR o.cost_amount IS NULL)
        AND (o.route_prefix IS NOT NULL OR o.total_fee > 0)
   `);
-  console.log(`[OrderFinance] trigger installed; ${rowCount} sparse rows filled (no historical vat overwrite)`);
+  console.log(`[OrderFinance] trigger installed; ${rowCount} sparse rows filled (no historical zero rewrite; no UNKNOWN→0)`);
 }
 ensureOrderFinanceTrigger().catch(console.error);
 

@@ -5,8 +5,19 @@ import { pool } from "@workspace/db";
 export const sheetsExportRouter = Router();
 
 // ── 格式化金額 ────────────────────────────────────────────────────────────────
+/** Generic money fmt for fields that SQL already COALESCE to 0 (client_bill / driver_payout). */
 function fmt(v: number | null | undefined): string {
   if (v == null) return "0";
+  return Number(v).toFixed(0);
+}
+
+/**
+ * MONEY #2dA sheets display: UNKNOWN (null) ≠ ZERO.
+ * null/undefined → blank cell; numeric 0 → "0"; negatives preserved.
+ * Must use == null (not !value / || 0).
+ */
+function fmtMoneyNullable(v: number | null | undefined): string {
+  if (v == null) return "";
   return Number(v).toFixed(0);
 }
 
@@ -26,7 +37,7 @@ async function fetchBillingRows(from?: string, to?: string) {
       COALESCE(customer_name, '')           AS customer_name,
       COALESCE(total_fee, 0)                AS client_bill,
       COALESCE(driver_pay, 0)               AS driver_payout,
-      COALESCE(profit_amount, total_fee - COALESCE(driver_pay,0), 0) AS profit,
+      profit_amount AS profit,
       COALESCE(vehicle_type, '')            AS vehicle_type,
       COALESCE(status, '')                  AS status
     FROM orders
@@ -38,7 +49,7 @@ async function fetchBillingRows(from?: string, to?: string) {
   return rows as {
     id: number; order_no: string; trip_date: string;
     customer_name: string; client_bill: number; driver_payout: number;
-    profit: number; vehicle_type: string; status: string;
+    profit: number | null; vehicle_type: string; status: string;
   }[];
 }
 
@@ -105,11 +116,16 @@ sheetsExportRouter.get("/sheets-export/preview", async (req, res) => {
     const rows = await fetchBillingRows(from, to);
     const totalClientBill = rows.reduce((s, r) => s + Number(r.client_bill), 0);
     const totalDriverPay  = rows.reduce((s, r) => s + Number(r.driver_payout), 0);
-    const totalProfit     = rows.reduce((s, r) => s + Number(r.profit), 0);
+    // Do not treat null profit as 0 in summary (UNKNOWN ≠ ZERO)
+    const totalProfit = rows.reduce(
+      (s, r) => (r.profit == null ? s : s + Number(r.profit)),
+      0
+    );
+    const profitUnknownCount = rows.filter((r) => r.profit == null).length;
     res.json({
       ok: true,
       count: rows.length,
-      summary: { totalClientBill, totalDriverPay, totalProfit },
+      summary: { totalClientBill, totalDriverPay, totalProfit, profitUnknownCount },
       rows: rows.slice(0, 20),
     });
   } catch (err: any) {
@@ -145,7 +161,7 @@ sheetsExportRouter.post("/sheets-export/backup", async (req, res) => {
       r.customer_name,
       fmt(r.client_bill),
       fmt(r.driver_payout),
-      fmt(r.profit),
+      fmtMoneyNullable(r.profit),
       r.vehicle_type,
       r.status,
       exportTime,

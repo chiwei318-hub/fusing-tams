@@ -52,7 +52,7 @@ async function fetchOrders(ids?: number[], from?: string, to?: string) {
       pickup_address, delivery_address, status,
       COALESCE(total_fee, 0)      AS total_fee,
       COALESCE(driver_pay, 0)     AS driver_payout,
-      COALESCE(profit_amount, total_fee - COALESCE(driver_pay,0), 0) AS profit,
+      profit_amount AS profit,
       vehicle_type, created_at, completed_at, driver_id
     FROM orders ${where}
     ORDER BY created_at DESC LIMIT 500
@@ -61,9 +61,16 @@ async function fetchOrders(ids?: number[], from?: string, to?: string) {
   return rows as {
     id: number; order_no: string; customer_name: string; customer_phone: string;
     pickup_address: string; delivery_address: string; status: string;
-    total_fee: number; driver_payout: number; profit: number;
+    total_fee: number; driver_payout: number; profit: number | null;
     vehicle_type: string; created_at: Date; completed_at: Date | null; driver_id: number | null;
   }[];
+}
+
+/** MONEY #2dA: preserve UNKNOWN — never Number(null)→0 */
+function nullableMoney(v: number | null | undefined): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isNaN(n) ? null : n;
 }
 
 // ── GET /api/firebase-sync/config-status ─────────────────────────────────────
@@ -133,7 +140,7 @@ firebaseSyncRouter.post("/firebase-sync/push", async (req, res) => {
           status: order.status,
           total_fee: Number(order.total_fee),
           driver_payout: Number(order.driver_payout),
-          profit: Number(order.profit),
+          profit: nullableMoney(order.profit),
           vehicle_type: order.vehicle_type ?? "",
           driver_id: order.driver_id ?? null,
           created_at: order.created_at,
@@ -154,7 +161,7 @@ firebaseSyncRouter.post("/firebase-sync/push", async (req, res) => {
           client_name: order.customer_name ?? "",
           amount: Number(order.total_fee),
           driver_payout: Number(order.driver_payout),
-          profit: Number(order.profit),
+          profit: nullableMoney(order.profit),
           status: order.status === "delivered" ? "payout_ready" : "pending_payout",
           created_at: order.created_at,
           updated_at: new Date(),
