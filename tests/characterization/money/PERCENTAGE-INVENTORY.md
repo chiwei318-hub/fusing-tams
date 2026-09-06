@@ -69,3 +69,44 @@ Rule: Do not assume 15%=commission or 5%=VAT without call-chain evidence.
 ## Inventory completeness
 
 This inventory focuses on `artifacts/api-server/src` financial paths + key FE consumers. Decorative KPI copy in `platformRequirements.ts` (e.g. “空駛率 ↓15%”) omitted as non-financial rates.
+
+---
+
+## Supplement — MONEY REPAIR #3 Commission SSoT (2026-09-06, READ-ONLY)
+
+Full write-up: [`COMMISSION-SSOT-AUDIT.md`](./COMMISSION-SSOT-AUDIT.md). Evidence-only additions below (no production change).
+
+### Rate base (must answer “% × WHAT”)
+
+| % / field | × base | Party meaning |
+|-----------|--------|---------------|
+| cashFlow `COALESCE(commission_rate,15)` | **orders.total_fee** | **Driver** share |
+| receipts `(rate\|\|15)` | **OCR amount** | **Platform** share |
+| reports gross-margin `COALESCE(...,70)` | **orders.total_fee** | **Driver cost** share (**UNVERIFIED_DEFAULT**) |
+| order_settlements `commission_rate` default 15 | **total_amount** | Platform service fee |
+| franchisees `commission_rate` default 70 | **gross_revenue** | Franchisee share |
+| franchisees `platform_commission_rate` default 10 | **salary gross** | Platform fee |
+| fusingao_fleets `commission_rate` default 15 | **income / rate_per_trip** | Platform cut of fleet channel |
+| financials `platform_profit` | **total_fee × 0.15** | LEGACY estimate (not reading commission_rate) |
+| fourLayer / fusingao_commission 5–7% | **trip / pretax** | Upstream |
+| driver_pay_rate / rate_per_trip | **per trip NT$** | **Driver Pay — not commission** |
+
+### Silent defaults (SILENT_DEFAULT)
+
+| Pattern | File | Effect |
+|---------|------|--------|
+| `COALESCE(..., 15)` | cashFlow | null → driver 15% of total_fee |
+| `\|\| 15` | receipts | null → platform 15% of amount |
+| `COALESCE(..., 70)` | reports gross-margin | null → driver cost 70% of total_fee |
+| `COALESCE(..., 0)` | reports driver-commission | null → $0 commission |
+| schema defaults 15/70/10/7 | drizzle | insert-time defaults |
+
+### Semantic collision (P0)
+
+`drivers.commission_rate` alone drives **opposite parties** in cashFlow vs receipts, and a **third** cost interpretation + **70** silent default in reports. Tag: **SEMANTIC COLLISION**. Same digit 15% across financials / settlements / fusingao ≠ same business concept.
+
+### Gross Profit isolation (@281e873)
+
+`orders.profit_amount = total_fee − cost_amount` does **not** read commission / commission_rate / 15% / 70% / 80%.  
+**PASS — Gross Profit independent from Commission.**  
+Same trigger may set `fleet_payout` from fusingao commission — separate column, not GP contamination.

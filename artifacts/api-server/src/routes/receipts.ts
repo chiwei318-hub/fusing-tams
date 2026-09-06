@@ -83,16 +83,28 @@ receiptsRouter.post("/receipts/ocr", async (req, res) => {
       extracted = { parseError: true, raw: rawText };
     }
 
-    // Auto-calculate commission if amount found
+    // MONEY REPAIR #3A: drivers.commission_rate = DRIVER_SETTLEMENT_RATE (driver share).
+    // Must NOT interpret it as PLATFORM COMMISSION. OCR path has no formal platform-rate SSoT
+    // → platformFee/platformRate stay null (no silent default 15).
     let commissionCalc: Record<string, any> | null = null;
     if (extracted.amount && typeof extracted.amount === "number") {
-      // Default driver commission rate is 85% (platform takes 15%)
-      const platformRate = 0.15;
-      const driverRate = 1 - platformRate;
-      const platformFee = Math.round(extracted.amount * platformRate);
-      const driverEarning = Math.round(extracted.amount * driverRate);
+      const amount = extracted.amount;
+      commissionCalc = {
+        amount,
+        driverId: null as number | null,
+        driverName: null as string | null,
+        driverSettlementRate: null as number | null,
+        driverRate: null as number | null,
+        driverEarning: null as number | null,
+        driverRateStatus: "DRIVER_RATE_UNAVAILABLE",
+        platformRate: null as number | null,
+        platformFee: null as number | null,
+        platformRateStatus: "PLATFORM_RATE_SSoT_MISSING",
+        companyRetainAmount: null as number | null,
+        note:
+          "drivers.commission_rate is DRIVER_SETTLEMENT_RATE (share of amount). Platform commission unavailable on OCR path.",
+      };
 
-      // Try to get driver's actual commission rate
       if (extracted.driverName || extracted.driverLicensePlate) {
         const driverRows = await db.execute(sql`
           SELECT id, name, commission_rate, license_plate
@@ -103,27 +115,22 @@ receiptsRouter.post("/receipts/ocr", async (req, res) => {
         `);
         const driverRow = (driverRows.rows as any[])[0];
         if (driverRow) {
-          const actualPlatformRate = (parseFloat(driverRow.commission_rate) || 15) / 100;
-          commissionCalc = {
-            driverId: driverRow.id,
-            driverName: driverRow.name,
-            amount: extracted.amount,
-            platformRate: actualPlatformRate * 100,
-            driverRate: (1 - actualPlatformRate) * 100,
-            platformFee: Math.round(extracted.amount * actualPlatformRate),
-            driverEarning: Math.round(extracted.amount * (1 - actualPlatformRate)),
-          };
+          commissionCalc.driverId = driverRow.id;
+          commissionCalc.driverName = driverRow.name;
+          const raw = driverRow.commission_rate;
+          const parsed =
+            raw == null || raw === "" ? NaN : parseFloat(String(raw));
+          if (!Number.isNaN(parsed)) {
+            // Same direction as cashFlow: rate% × amount = driver_payout
+            const driverEarning = Math.round(amount * (parsed / 100));
+            commissionCalc.driverSettlementRate = parsed;
+            commissionCalc.driverRate = parsed;
+            commissionCalc.driverEarning = driverEarning;
+            commissionCalc.driverRateStatus = "OK";
+            commissionCalc.companyRetainAmount = Math.round(amount - driverEarning);
+            // platformFee intentionally null — residual ≠ configured platform commission rate
+          }
         }
-      }
-
-      if (!commissionCalc) {
-        commissionCalc = {
-          amount: extracted.amount,
-          platformRate: platformRate * 100,
-          driverRate: driverRate * 100,
-          platformFee,
-          driverEarning,
-        };
       }
     }
 
@@ -178,12 +185,27 @@ receiptsRouter.post("/receipts/confirm-settlement", async (req, res) => {
       orderId?: number;
       driverId?: number;
       amount: number;
-      platformFee: number;
-      driverEarning: number;
+      platformFee: number | null;
+      driverEarning: number | null;
       deliveryDate?: string;
       notes?: string;
       podPhotoUrl?: string;
     };
+
+    // #3A: refuse write when OCR left platform commission unavailable (no silent 15%)
+    if (
+      platformFee == null ||
+      driverEarning == null ||
+      Number.isNaN(Number(platformFee)) ||
+      Number.isNaN(Number(driverEarning))
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "platformFee/driverEarning unavailable (PLATFORM_RATE_SSoT_MISSING or driver settlement rate missing)",
+        platformRateStatus: "PLATFORM_RATE_SSoT_MISSING",
+      });
+    }
 
     // Update order if given
     if (orderId) {

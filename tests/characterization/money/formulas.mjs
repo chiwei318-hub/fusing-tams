@@ -88,3 +88,80 @@ export function calcExclusiveVat(netAmount, roundMode = "cent") {
   const taxAmount = roundMode === "yuan" ? Math.round(net * 0.05) : Math.round(net * 0.05 * 100) / 100;
   return { net, taxAmount, grandTotal: net + taxAmount, basis: "exclusive", rateVersion: "TW-VAT-0.05-default" };
 }
+
+/**
+ * cashFlow.ts — drivers.commission_rate as DRIVER_SETTLEMENT_RATE (driver share).
+ * Evidence: driver_payout = total_fee * COALESCE(rate,15)/100; platform_net = total_fee - driver_payout
+ */
+export function cashFlowDriverSettlement({ total_fee, commission_rate, silentDefault = 15 }) {
+  const fee = Number(total_fee) || 0;
+  const rate =
+    commission_rate == null || commission_rate === ""
+      ? Number(silentDefault)
+      : Number(commission_rate);
+  const driver_payout = Math.round(fee * (rate / 100));
+  const platform_net = Math.round(fee - fee * (rate / 100));
+  return {
+    driver_payout,
+    platform_net,
+    rate_direction: "MULTIPLY_RATE",
+    share_party: "DRIVER",
+    rate_pct: rate,
+  };
+}
+
+/**
+ * receipts OCR #3A — DRIVER_SETTLEMENT_RATE only; platform commission null (no silent 15).
+ * Mirrors artifacts/api-server/src/routes/receipts.ts post-repair contract.
+ */
+export function receiptsOcrSettlementCalc({
+  amount,
+  driverCommissionRate = null,
+  driverResolved = false,
+}) {
+  const amt = Number(amount);
+  const base = {
+    amount: amt,
+    driverSettlementRate: null,
+    driverRate: null,
+    driverEarning: null,
+    driverRateStatus: "DRIVER_RATE_UNAVAILABLE",
+    platformRate: null,
+    platformFee: null,
+    platformRateStatus: "PLATFORM_RATE_SSoT_MISSING",
+    companyRetainAmount: null,
+  };
+  if (!driverResolved) return base;
+  if (driverCommissionRate == null || driverCommissionRate === "") return base;
+  const parsed = Number(driverCommissionRate);
+  if (Number.isNaN(parsed)) return base;
+  const driverEarning = Math.round(amt * (parsed / 100));
+  return {
+    ...base,
+    driverSettlementRate: parsed,
+    driverRate: parsed,
+    driverEarning,
+    driverRateStatus: "OK",
+    companyRetainAmount: Math.round(amt - driverEarning),
+  };
+}
+
+/** LEGACY receipts (pre-#3A) — DO NOT USE; characterization of old collision */
+export function receiptsOcrSettlementCalcLegacyWrong({ amount, driverCommissionRate }) {
+  const amt = Number(amount);
+  const actualPlatformRate = (Number(driverCommissionRate) || 15) / 100;
+  return {
+    platformRate: actualPlatformRate * 100,
+    driverRate: (1 - actualPlatformRate) * 100,
+    platformFee: Math.round(amt * actualPlatformRate),
+    driverEarning: Math.round(amt * (1 - actualPlatformRate)),
+    treated_driver_rate_as: "PLATFORM",
+  };
+}
+
+/** reports gross-margin — UNVERIFIED_DEFAULT 70; not modified by #3A */
+export function reportsGrossMarginDriverCost({ total_fee, commission_rate }) {
+  const fee = Number(total_fee) || 0;
+  const rate = commission_rate == null || commission_rate === "" ? 70 : Number(commission_rate);
+  return { driver_cost: Math.round(fee * (rate / 100)), silent_default: 70, tag: "UNVERIFIED_DEFAULT" };
+}

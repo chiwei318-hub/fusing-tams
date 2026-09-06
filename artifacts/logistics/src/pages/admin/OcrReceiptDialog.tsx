@@ -33,13 +33,21 @@ interface OcrResult {
   ok: boolean;
   extracted: OcrExtracted;
   commissionCalc: {
-    driverId?: number;
-    driverName?: string;
+    driverId?: number | null;
+    driverName?: string | null;
     amount: number;
-    platformRate: number;
-    driverRate: number;
-    platformFee: number;
-    driverEarning: number;
+    /** Platform commission % — null when PLATFORM_RATE_SSoT_MISSING */
+    platformRate: number | null;
+    platformFee: number | null;
+    platformRateStatus?: string;
+    /** DRIVER_SETTLEMENT_RATE % (drivers.commission_rate) */
+    driverSettlementRate?: number | null;
+    driverRate: number | null;
+    driverEarning: number | null;
+    driverRateStatus?: string;
+    companyRetainAmount?: number | null;
+    canConfirmSettlement?: boolean;
+    note?: string;
   } | null;
   matchedOrder: {
     id: number;
@@ -51,6 +59,16 @@ interface OcrResult {
     customerName: string;
   } | null;
   error?: string;
+}
+
+function fmtMoney(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  return `NT$${Number(n).toLocaleString()}`;
+}
+
+function fmtPct(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  return `${Number(n).toFixed(1)}%`;
 }
 
 interface Props {
@@ -110,9 +128,18 @@ export default function OcrReceiptDialog({ open, onClose, defaultOrderId }: Prop
 
   async function handleConfirm() {
     if (!result?.commissionCalc) return;
+    const { commissionCalc } = result;
+    if (commissionCalc.platformFee == null || commissionCalc.driverEarning == null) {
+      toast({
+        title: "無法自動寫入對帳",
+        description: "平台抽成來源未定義（PLATFORM_RATE_SSoT_MISSING），請勿用司機結算率代替",
+        variant: "destructive",
+      });
+      return;
+    }
     setConfirming(true);
     try {
-      const { commissionCalc, extracted, matchedOrder } = result;
+      const { extracted, matchedOrder } = result;
       const body: Record<string, any> = {
         amount: commissionCalc.amount,
         platformFee: commissionCalc.platformFee,
@@ -132,7 +159,10 @@ export default function OcrReceiptDialog({ open, onClose, defaultOrderId }: Prop
 
       if (!data.ok) throw new Error(data.error);
       setStep("confirm");
-      toast({ title: "✅ 對帳完成", description: `AR 單號 ${data.arRef}，抽成 NT$${commissionCalc.platformFee.toLocaleString()} 已入帳` });
+      toast({
+        title: "✅ 對帳完成",
+        description: `AR 單號 ${data.arRef}，抽成 ${fmtMoney(commissionCalc.platformFee)} 已入帳`,
+      });
     } catch (e: any) {
       toast({ title: "結算失敗", description: e.message, variant: "destructive" });
     } finally {
@@ -267,25 +297,46 @@ export default function OcrReceiptDialog({ open, onClose, defaultOrderId }: Prop
               </div>
             )}
 
-            {/* Commission calculation */}
+            {/* Settlement preview — driver rate ≠ platform commission */}
             {result.commissionCalc ? (
               <Card className="border-green-200 bg-green-50">
                 <CardContent className="p-3 space-y-2">
                   <p className="text-xs font-semibold text-green-700 flex items-center gap-1">
-                    <Percent className="w-3 h-3" />自動抽成計算
+                    <Percent className="w-3 h-3" />結算預覽
                   </p>
                   {[
-                    ["運費金額", `NT$${result.commissionCalc.amount.toLocaleString()}`],
-                    ["平台抽成", `${result.commissionCalc.platformRate.toFixed(1)}% → NT$${result.commissionCalc.platformFee.toLocaleString()}`],
-                    ["司機應收", `${result.commissionCalc.driverRate.toFixed(1)}% → NT$${result.commissionCalc.driverEarning.toLocaleString()}`],
+                    ["運費金額", fmtMoney(result.commissionCalc.amount)],
+                    [
+                      "司機結算率",
+                      result.commissionCalc.driverRateStatus === "OK"
+                        ? `${fmtPct(result.commissionCalc.driverSettlementRate ?? result.commissionCalc.driverRate)} → ${fmtMoney(result.commissionCalc.driverEarning)}`
+                        : "—（無司機結算率）",
+                    ],
+                    [
+                      "公司保留（殘額）",
+                      result.commissionCalc.companyRetainAmount != null
+                        ? fmtMoney(result.commissionCalc.companyRetainAmount)
+                        : "—",
+                    ],
+                    [
+                      "平台抽成",
+                      result.commissionCalc.platformFee != null
+                        ? `${fmtPct(result.commissionCalc.platformRate)} → ${fmtMoney(result.commissionCalc.platformFee)}`
+                        : "不可用（PLATFORM_RATE_SSoT_MISSING）",
+                    ],
                   ].map(([label, val]) => (
-                    <div key={label} className="flex justify-between text-xs">
-                      <span className="text-gray-500">{label}</span>
-                      <span className="font-bold text-gray-800">{val}</span>
+                    <div key={label} className="flex justify-between text-xs gap-2">
+                      <span className="text-gray-500 shrink-0">{label}</span>
+                      <span className="font-bold text-gray-800 text-right">{val}</span>
                     </div>
                   ))}
                   {result.commissionCalc.driverName && (
                     <p className="text-[10px] text-green-600 pt-0.5">司機：{result.commissionCalc.driverName}</p>
+                  )}
+                  {result.commissionCalc.platformFee == null && (
+                    <p className="text-[10px] text-amber-700 pt-1">
+                      已停止用 drivers.commission_rate 充當平台抽成。自動寫入對帳暫停至平台費率 SSoT 就緒。
+                    </p>
                   )}
                 </CardContent>
               </Card>
@@ -299,7 +350,12 @@ export default function OcrReceiptDialog({ open, onClose, defaultOrderId }: Prop
               <Button variant="outline" onClick={reset} size="sm">重新上傳</Button>
               <Button
                 onClick={handleConfirm}
-                disabled={confirming || !result.commissionCalc}
+                disabled={
+                  confirming ||
+                  !result.commissionCalc ||
+                  result.commissionCalc.platformFee == null ||
+                  result.commissionCalc.driverEarning == null
+                }
                 size="sm"
                 className="bg-green-600 hover:bg-green-700"
               >
@@ -320,10 +376,10 @@ export default function OcrReceiptDialog({ open, onClose, defaultOrderId }: Prop
             <div>
               <p className="font-bold text-gray-800">對帳完成！</p>
               <p className="text-sm text-gray-500 mt-1">
-                平台抽成 <strong className="text-green-700">NT${result.commissionCalc.platformFee.toLocaleString()}</strong> 已記入 AR 帳冊
+                平台抽成 <strong className="text-green-700">{fmtMoney(result.commissionCalc.platformFee)}</strong> 已記入 AR 帳冊
               </p>
               <p className="text-sm text-gray-500">
-                司機應收 <strong className="text-blue-700">NT${result.commissionCalc.driverEarning.toLocaleString()}</strong> 已建立付款紀錄
+                司機應收 <strong className="text-blue-700">{fmtMoney(result.commissionCalc.driverEarning)}</strong> 已建立付款紀錄
               </p>
             </div>
             <Button onClick={() => { reset(); onClose(); }} variant="outline" size="sm">關閉</Button>
