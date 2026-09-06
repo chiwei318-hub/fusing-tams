@@ -118,6 +118,8 @@ reportsRouter.get("/reports/driver-commission", async (req, res) => {
 });
 
 // ── 毛利報表（月度）─────────────────────────────────────────────────────────
+// MONEY #3B: canonical total_fee / cost_amount / profit_amount.
+// Do NOT use drivers.commission_rate or COALESCE(...,70) as report cost.
 reportsRouter.get("/reports/gross-margin", async (req, res) => {
   const months = Math.min(12, Number(req.query.months ?? 6));
 
@@ -128,14 +130,20 @@ reportsRouter.get("/reports/gross-margin", async (req, res) => {
           TO_CHAR(COALESCE(o.completed_at, o.created_at), 'YYYY-MM') AS month,
           COUNT(o.id)                                                  AS order_count,
           COALESCE(SUM(o.total_fee), 0)                               AS gross_revenue,
-          COALESCE(SUM(o.total_fee::numeric * COALESCE(d.commission_rate, 70) / 100), 0) AS driver_cost,
+          COUNT(o.id) FILTER (WHERE o.cost_amount IS NOT NULL)         AS cost_known_count,
+          COUNT(o.id) FILTER (WHERE o.cost_amount IS NULL)             AS cost_unknown_count,
+          COUNT(o.id) FILTER (WHERE o.profit_amount IS NOT NULL)       AS profit_known_count,
+          COUNT(o.id) FILTER (WHERE o.profit_amount IS NULL)           AS profit_unknown_count,
+          COALESCE(SUM(o.cost_amount) FILTER (WHERE o.cost_amount IS NOT NULL), 0)
+                                                                       AS driver_cost_known_sum,
+          COALESCE(SUM(o.profit_amount) FILTER (WHERE o.profit_amount IS NOT NULL), 0)
+                                                                       AS profit_known_sum,
           COALESCE(SUM(o.extra_fee), 0)                               AS extra_revenue,
           COUNT(o.id) FILTER (WHERE o.enterprise_id IS NOT NULL)       AS enterprise_orders,
           COUNT(o.id) FILTER (WHERE o.enterprise_id IS NULL)           AS retail_orders,
           COALESCE(SUM(o.total_fee) FILTER (WHERE o.enterprise_id IS NOT NULL), 0) AS enterprise_revenue,
           COALESCE(SUM(o.total_fee) FILTER (WHERE o.enterprise_id IS NULL), 0)     AS retail_revenue
         FROM orders o
-        LEFT JOIN drivers d ON d.id = o.driver_id
         WHERE o.status = 'delivered'
           AND COALESCE(o.completed_at, o.created_at) >= NOW() - (${months} || ' months')::interval
         GROUP BY TO_CHAR(COALESCE(o.completed_at, o.created_at), 'YYYY-MM')
@@ -151,13 +159,37 @@ reportsRouter.get("/reports/gross-margin", async (req, res) => {
         mb.month,
         mb.order_count,
         mb.gross_revenue,
-        mb.driver_cost,
-        COALESCE(mf.franchise_cost, 0)                                  AS franchise_cost,
         mb.extra_revenue,
-        mb.gross_revenue - mb.driver_cost - COALESCE(mf.franchise_cost, 0) AS gross_profit,
-        CASE WHEN mb.gross_revenue > 0
-          THEN ROUND(((mb.gross_revenue - mb.driver_cost - COALESCE(mf.franchise_cost, 0)) / mb.gross_revenue * 100)::numeric, 1)
-          ELSE 0
+        mb.cost_known_count,
+        mb.cost_unknown_count,
+        mb.profit_known_count,
+        mb.profit_unknown_count,
+        mb.driver_cost_known_sum,
+        mb.profit_known_sum,
+        CASE
+          WHEN mb.cost_unknown_count = 0 AND mb.profit_unknown_count = 0 THEN true
+          ELSE false
+        END AS cost_data_complete,
+        CASE
+          WHEN mb.cost_unknown_count = 0 AND mb.profit_unknown_count = 0 THEN 'COMPLETE'
+          WHEN mb.cost_known_count > 0 OR mb.profit_known_count > 0 THEN 'PARTIAL'
+          ELSE 'UNKNOWN'
+        END AS cost_status,
+        CASE
+          WHEN mb.cost_unknown_count = 0 AND mb.profit_unknown_count = 0
+            THEN mb.driver_cost_known_sum
+          ELSE NULL
+        END AS driver_cost,
+        COALESCE(mf.franchise_cost, 0) AS franchise_cost,
+        CASE
+          WHEN mb.cost_unknown_count = 0 AND mb.profit_unknown_count = 0
+            THEN mb.profit_known_sum
+          ELSE NULL
+        END AS gross_profit,
+        CASE
+          WHEN mb.cost_unknown_count = 0 AND mb.profit_unknown_count = 0 AND mb.gross_revenue > 0
+            THEN ROUND((mb.profit_known_sum / mb.gross_revenue * 100)::numeric, 1)
+          ELSE NULL
         END AS gross_margin_pct,
         mb.enterprise_orders, mb.retail_orders,
         mb.enterprise_revenue, mb.retail_revenue

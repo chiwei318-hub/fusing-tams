@@ -110,3 +110,25 @@ Full write-up: [`COMMISSION-SSOT-AUDIT.md`](./COMMISSION-SSOT-AUDIT.md). Evidenc
 `orders.profit_amount = total_fee − cost_amount` does **not** read commission / commission_rate / 15% / 70% / 80%.  
 **PASS — Gross Profit independent from Commission.**  
 Same trigger may set `fleet_payout` from fusingao commission — separate column, not GP contamination.
+
+---
+
+## Supplement — MONEY #3B Report 70% Cost (2026-09-06, READ-ONLY)
+
+Full write-up: [`REPORT-70-COST-SSOT-AUDIT.md`](./REPORT-70-COST-SSOT-AUDIT.md).
+
+| Item | Evidence |
+|------|----------|
+| Location | `reports.ts` `GET /reports/gross-margin` only (money path) |
+| Formula | `driver_cost = SUM(total_fee × COALESCE(d.commission_rate, 70) / 100)` |
+| Base | **orders.total_fee** |
+| Source | **HARDCODED SILENT_DEFAULT** — **UNVERIFIED_DEFAULT** (no contract/policy) |
+| Classification | **SILENT_DEFAULT** / **ESTIMATED** — not actual cost |
+| Canonical cost | `orders.cost_amount` — **not read** by this report |
+| UI | `FinanceReportsTab` GrossMarginPanel — **ACTIVE** |
+| DB write of 70% result | **NO** (read-time only) → historical DB contamination from fallback: **NO** |
+| vs drivers.commission_rate | **Misuse**: field is DRIVER_SETTLEMENT_RATE (`40f0a62`); report treats as cost % |
+| vs cashFlow silent 15 | Same field, different silent default (**15** vs **70**) |
+| Shadow fee=10000 cost=800 rate=null | Actual cost 800; report cost **7000**; canonical GP **9200**; report GP **3000** |
+| financials ×15 / AP ×80 | Code **ISOLATED** from R70; coexistence = **MULTIPLE_FINANCIAL_TRUTH** |
+| Note | receipts platform misuse fixed in `40f0a62`; **#3B REPAIR**: gross-margin now uses `cost_amount`/`profit_amount`; `COALESCE(...,70)` **removed** (see REPORT-70-COST-REPAIR.md) |

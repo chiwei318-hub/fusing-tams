@@ -29,10 +29,21 @@ function authFetch(path: string) {
     .then(r => { if (!r.ok) throw new Error(`API ${r.status}`); return r.json(); });
 }
 
-function fmtAmt(n: number) {
-  if (!n && n !== 0) return "—";
+function fmtAmt(n: number | null | undefined) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
   if (n === 0) return "NT$ 0";
   return `NT$ ${Math.round(n).toLocaleString("zh-TW")}`;
+}
+
+function fmtPct(n: number | null | undefined) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  return `${Number(n).toFixed(1)}%`;
+}
+
+function numOrNull(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isNaN(n) ? null : n;
 }
 
 function ageBadge(days: number) {
@@ -319,13 +330,22 @@ function GrossMarginPanel() {
     staleTime: 5 * 60_000,
   });
 
-  const chartData = [...data].reverse().map((r: any) => ({
-    month:         r.month,
-    gross_revenue: Number(r.gross_revenue ?? 0),
-    driver_cost:   Number(r.driver_cost ?? 0),
-    gross_profit:  Number(r.gross_profit ?? 0),
-    margin_pct:    Number(r.gross_margin_pct ?? 0),
-  }));
+  const hasPartial = data.some(
+    (r: any) => r.cost_data_complete === false || r.cost_status === "PARTIAL" || r.cost_status === "UNKNOWN"
+  );
+
+  // Chart: only COMPLETE months get cost/profit points — never coerce null→0
+  const chartData = [...data].reverse().map((r: any) => {
+    const complete = r.cost_data_complete === true || r.cost_status === "COMPLETE";
+    return {
+      month: r.month,
+      gross_revenue: Number(r.gross_revenue ?? 0),
+      driver_cost: complete ? numOrNull(r.driver_cost) : null,
+      gross_profit: complete ? numOrNull(r.gross_profit) : null,
+      margin_pct: complete ? numOrNull(r.gross_margin_pct) : null,
+      complete,
+    };
+  });
 
   return (
     <div className="space-y-4">
@@ -342,6 +362,16 @@ function GrossMarginPanel() {
         </Button>
       </div>
 
+      {hasPartial && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          <span>
+            部分月份成本／毛利資料不足（PARTIAL）。已知子合計不會當成完整司機成本或完整毛利率；
+            已移除 70% 估算 fallback。
+          </span>
+        </div>
+      )}
+
       {isLoading && <PanelSkeleton />}
       {isError   && <PanelError msg={(error as Error).message} retry={refetch} />}
 
@@ -349,7 +379,7 @@ function GrossMarginPanel() {
         <>
           <Card>
             <CardHeader className="py-3 px-4">
-              <CardTitle className="text-sm text-muted-foreground">月度營收 vs 毛利</CardTitle>
+              <CardTitle className="text-sm text-muted-foreground">月度營收 vs 毛利（僅完整資料月份）</CardTitle>
             </CardHeader>
             <CardContent className="p-4 pt-0">
               <ResponsiveContainer width="100%" height={220}>
@@ -357,7 +387,10 @@ function GrossMarginPanel() {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="month" tick={{ fontSize: 10 }} />
                   <YAxis tickFormatter={v => `${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 10 }} />
-                  <Tooltip formatter={(v: any, name: string) => [`NT$ ${Number(v).toLocaleString()}`, name]} />
+                  <Tooltip formatter={(v: any, name: string) => [
+                    v == null ? "資料不足" : `NT$ ${Number(v).toLocaleString()}`,
+                    name,
+                  ]} />
                   <Legend />
                   <Bar dataKey="gross_revenue" name="總收入"   fill="#3b82f6" />
                   <Bar dataKey="driver_cost"   name="司機成本" fill="#f97316" />
@@ -369,7 +402,7 @@ function GrossMarginPanel() {
 
           <Card>
             <CardHeader className="py-3 px-4">
-              <CardTitle className="text-sm text-muted-foreground">毛利率趨勢</CardTitle>
+              <CardTitle className="text-sm text-muted-foreground">毛利率趨勢（僅完整資料）</CardTitle>
             </CardHeader>
             <CardContent className="p-4 pt-0">
               <ResponsiveContainer width="100%" height={160}>
@@ -377,8 +410,8 @@ function GrossMarginPanel() {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="month" tick={{ fontSize: 10 }} />
                   <YAxis unit="%" domain={[0, 100]} tick={{ fontSize: 10 }} />
-                  <Tooltip formatter={(v: any) => `${Number(v).toFixed(1)}%`} />
-                  <Line dataKey="margin_pct" name="毛利率" stroke="#6366f1" strokeWidth={2} dot />
+                  <Tooltip formatter={(v: any) => (v == null ? "資料不足" : `${Number(v).toFixed(1)}%`)} />
+                  <Line dataKey="margin_pct" name="毛利率" stroke="#6366f1" strokeWidth={2} dot connectNulls={false} />
                 </LineChart>
               </ResponsiveContainer>
             </CardContent>
@@ -392,28 +425,54 @@ function GrossMarginPanel() {
             <table className="w-full text-sm">
               <thead className="bg-muted/50 border-b">
                 <tr>
-                  {["月份","訂單數","總收入","司機成本","加盟成本","毛利","毛利率","企業","散客"].map(h => (
+                  {["月份","狀態","訂單數","總收入","司機成本","已知成本小計","加盟成本","毛利","毛利率","企業","散客"].map(h => (
                     <th key={h} className="px-3 py-2 text-left text-xs text-muted-foreground font-medium whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {data.map((r: any) => {
-                  const marginPct = Number(r.gross_margin_pct ?? 0);
+                  const status = String(r.cost_status ?? (r.cost_data_complete ? "COMPLETE" : "PARTIAL"));
+                  const complete = status === "COMPLETE";
+                  const marginPct = numOrNull(r.gross_margin_pct);
+                  const knownSum = numOrNull(r.driver_cost_known_sum);
+                  const unknownN = Number(r.cost_unknown_count ?? 0);
                   return (
                     <tr key={r.month} className="border-b hover:bg-muted/30 transition-colors">
                       <td className="px-3 py-2 font-medium">{r.month}</td>
+                      <td className="px-3 py-2">
+                        {complete ? (
+                          <Badge className="bg-green-100 text-green-700 text-xs">完整</Badge>
+                        ) : (
+                          <Badge className="bg-amber-100 text-amber-800 text-xs">
+                            {status === "UNKNOWN" ? "資料不足" : "部分資料"}
+                          </Badge>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-center">{r.order_count}</td>
                       <td className="px-3 py-2">{fmtAmt(Number(r.gross_revenue))}</td>
-                      <td className="px-3 py-2 text-orange-600">{fmtAmt(Number(r.driver_cost))}</td>
-                      <td className="px-3 py-2 text-purple-600">{fmtAmt(Number(r.franchise_cost))}</td>
-                      <td className="px-3 py-2 font-semibold text-green-600">{fmtAmt(Number(r.gross_profit))}</td>
+                      <td className="px-3 py-2 text-orange-600">
+                        {complete ? fmtAmt(numOrNull(r.driver_cost)) : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">
+                        {!complete && knownSum != null
+                          ? `${fmtAmt(knownSum)}${unknownN > 0 ? `（缺 ${unknownN} 筆）` : ""}`
+                          : complete ? "—" : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-purple-600">{fmtAmt(Number(r.franchise_cost ?? 0))}</td>
+                      <td className="px-3 py-2 font-semibold text-green-600">
+                        {complete ? fmtAmt(numOrNull(r.gross_profit)) : "—"}
+                      </td>
                       <td className="px-3 py-2">
-                        <span className={`font-semibold ${
-                          marginPct >= 30 ? "text-green-600" : marginPct >= 15 ? "text-yellow-600" : "text-red-500"
-                        }`}>
-                          {marginPct.toFixed(1)}%
-                        </span>
+                        {complete && marginPct != null ? (
+                          <span className={`font-semibold ${
+                            marginPct >= 30 ? "text-green-600" : marginPct >= 15 ? "text-yellow-600" : "text-red-500"
+                          }`}>
+                            {fmtPct(marginPct)}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-center">{r.enterprise_orders}</td>
                       <td className="px-3 py-2 text-center">{r.retail_orders}</td>
@@ -422,7 +481,7 @@ function GrossMarginPanel() {
                 })}
                 {!data.length && !isLoading && (
                   <tr>
-                    <td colSpan={9} className="text-center py-10 text-muted-foreground text-sm">
+                    <td colSpan={11} className="text-center py-10 text-muted-foreground text-sm">
                       無已完成訂單資料
                     </td>
                   </tr>

@@ -159,9 +159,70 @@ export function receiptsOcrSettlementCalcLegacyWrong({ amount, driverCommissionR
   };
 }
 
-/** reports gross-margin — UNVERIFIED_DEFAULT 70; not modified by #3A */
+/** reports gross-margin — UNVERIFIED_DEFAULT 70; LEGACY pre-#3B — do not use */
 export function reportsGrossMarginDriverCost({ total_fee, commission_rate }) {
   const fee = Number(total_fee) || 0;
   const rate = commission_rate == null || commission_rate === "" ? 70 : Number(commission_rate);
   return { driver_cost: Math.round(fee * (rate / 100)), silent_default: 70, tag: "UNVERIFIED_DEFAULT" };
+}
+
+/**
+ * MONEY #3B — report month aggregate from canonical order money fields.
+ * UNKNOWN cost/profit → PARTIAL; known subtotal must not become full driver_cost.
+ * cost_amount === 0 is known zero (not auto-null).
+ */
+export function reportGrossMarginAggregate(orders, { franchise_cost = 0 } = {}) {
+  const list = Array.isArray(orders) ? orders : [];
+  let gross_revenue = 0;
+  let cost_known_count = 0;
+  let cost_unknown_count = 0;
+  let profit_known_count = 0;
+  let profit_unknown_count = 0;
+  let driver_cost_known_sum = 0;
+  let profit_known_sum = 0;
+
+  for (const o of list) {
+    gross_revenue += Number(o.total_fee) || 0;
+    if (o.cost_amount == null) cost_unknown_count += 1;
+    else {
+      cost_known_count += 1;
+      driver_cost_known_sum += Number(o.cost_amount);
+    }
+    if (o.profit_amount == null) profit_unknown_count += 1;
+    else {
+      profit_known_count += 1;
+      profit_known_sum += Number(o.profit_amount);
+    }
+  }
+
+  const complete = cost_unknown_count === 0 && profit_unknown_count === 0;
+  const cost_status = complete
+    ? "COMPLETE"
+    : cost_known_count > 0 || profit_known_count > 0
+      ? "PARTIAL"
+      : "UNKNOWN";
+
+  const driver_cost = complete ? driver_cost_known_sum : null;
+  const gross_profit = complete ? profit_known_sum : null;
+  const gross_margin_pct =
+    complete && gross_revenue > 0
+      ? Math.round((profit_known_sum / gross_revenue) * 1000) / 10
+      : null;
+
+  return {
+    order_count: list.length,
+    gross_revenue,
+    franchise_cost: Number(franchise_cost) || 0,
+    cost_known_count,
+    cost_unknown_count,
+    profit_known_count,
+    profit_unknown_count,
+    driver_cost_known_sum,
+    profit_known_sum,
+    cost_data_complete: complete,
+    cost_status,
+    driver_cost,
+    gross_profit,
+    gross_margin_pct,
+  };
 }

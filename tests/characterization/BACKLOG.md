@@ -8,7 +8,7 @@
 | 2c | `commission_rate` meaning split (driver vs platform) | **#3A Done** (receipts); reports=#3B deferred | See COMMISSION-DRIVER-SEMANTIC-REPAIR.md | Medium |
 | 2d | `cost_amount=0` when no route rate → profit≈revenue (overstated) | Deferred | Rate-table coverage gap; V1 tracked-cost only | Low |
 | 3 | `exception` → TMS `picking` visibility | Observing | Confirm downstream on `order_status` only | Low |
-| 3B | REPORT DRIVER COST RATE (reports COALESCE 70) | Deferred | UNVERIFIED_DEFAULT; do not mix with #3A | Medium |
+| 3B | REPORT DRIVER COST RATE (reports COALESCE 70) | **Done** (#3B REPAIR) | See REPORT-70-COST-REPAIR.md | — |
 | 3C | financials ×15% deprecate/rename | Deferred | LEGACY_HARDCODED_APPROXIMATION | Medium |
 | 3D | `PLATFORM_COMMISSION_RATE` SSoT (prerequisite to restore OCR auto-post) | Deferred | Missing formal platform rate for OCR path | High |
 | 3E | Historical OCR AR / driver_earnings written under inverted platform semantic | Deferred | Audit only; no bulk rewrite | Medium |

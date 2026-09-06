@@ -115,12 +115,16 @@ describe("MONEY #3A isolation: GP / Driver Pay / reports70 / financials15 unchan
     assert.equal(r.profit_amount, 1300);
   });
 
-  it("reports 70% UNVERIFIED_DEFAULT still present (not repaired this round)", () => {
-    const r = reportsGrossMarginDriverCost({ total_fee: 10000, commission_rate: null });
-    assert.equal(r.driver_cost, 7000);
-    assert.equal(r.tag, "UNVERIFIED_DEFAULT");
+  it("reports 70% UNVERIFIED_DEFAULT removed from gross-margin (#3B)", () => {
+    const legacy = reportsGrossMarginDriverCost({ total_fee: 10000, commission_rate: null });
+    assert.equal(legacy.driver_cost, 7000);
+    assert.equal(legacy.tag, "UNVERIFIED_DEFAULT");
     const src = readSrc("artifacts/api-server/src/routes/reports.ts");
-    assert.match(src, /COALESCE\(d\.commission_rate,\s*70\)/);
+    assert.doesNotMatch(src, /COALESCE\(d\.commission_rate,\s*70\)/);
+    assert.doesNotMatch(src, /commission_rate,\s*70/);
+    assert.match(src, /cost_amount/);
+    assert.match(src, /profit_amount/);
+    assert.match(src, /cost_status/);
   });
 
   it("financials ×15% LEGACY still present (not repaired this round)", () => {
