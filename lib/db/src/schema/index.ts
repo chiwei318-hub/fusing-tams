@@ -13,6 +13,7 @@ export * from "./vehicleCosts";
 export * from "./ratings";
 export * from "./quoteRequests";
 export * from "./settlements";
+export * from "./pricingConfig";
 export * from "./arApRecords";
 export * from "./fusingaoFleets";
 export * from "./franchisees";

@@ -63,3 +63,15 @@ export async function runMigrations(): Promise<void> {
     await pool.end();
   }
 }
+
+// CLI: `pnpm --filter @workspace/db migrate` / `tsx ./src/migrate.ts`
+const isDirectRun =
+  typeof process.argv[1] === "string" &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (isDirectRun) {
+  runMigrations().catch((err) => {
+    console.error("[migrate] Failed:", err);
+    process.exit(1);
+  });
+}

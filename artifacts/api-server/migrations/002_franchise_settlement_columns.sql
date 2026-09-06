@@ -1,3 +1,11 @@
+-- ============================================================================
+-- SUPERSEDED — DO NOT APPLY MANUALLY
+-- Folded into canonical Drizzle migrations:
+--   lib/db/drizzle/0002_goofy_morlocks.sql  (pricing_config CREATE)
+--   lib/db/drizzle/0003_short_marauders.sql (order_settlements franchise cols + UNIQUE(order_id))
+-- Kept for historical reference only. Formal init path = Drizzle migrate only.
+-- ============================================================================
+
 -- Migration: 加盟主清算欄位
 -- 在 order_settlements 加入保險費、手續費、加盟主撥款欄位
 -- 以及 pricing_config 預設費率設定

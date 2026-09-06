@@ -22,27 +22,89 @@ import { broadcastWebhook }    from "./webhooks";
 
 export const franchiseSettlementsRouter = Router();
 
-// ─── 費率設定讀取 ─────────────────────────────────────────────────────────────
-async function getRates(): Promise<{
-  commissionRate: number;
-  insuranceRate:  number;
-  otherFeeRate:   number;
-  otherFeeFixed:  number;
-}> {
+/** Thrown when settlement rates are not provided in request and not configured in DB. */
+export class PricingConfigMissingError extends Error {
+  readonly code = "PRICING_CONFIG_MISSING" as const;
+  constructor(public readonly missingKeys: string[]) {
+    super(`pricing_config missing required key(s): ${missingKeys.join(", ")}`);
+    this.name = "PricingConfigMissingError";
+  }
+}
+
+type SettlementRateOverrides = {
+  commission_rate?: unknown;
+  insurance_rate?: unknown;
+  other_fee_rate?: unknown;
+  other_fee_fixed?: unknown;
+};
+
+function parseOptionalNumber(v: unknown): number | undefined {
+  if (v === undefined || v === null || v === "") return undefined;
+  const n = typeof v === "number" ? v : parseFloat(String(v));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+async function loadSettlementRateMap(): Promise<Record<string, number>> {
   const result = await db.execute(sql`
     SELECT key, value FROM pricing_config
     WHERE key IN ('default_commission_rate','insurance_rate','other_fee_rate','other_fee_fixed')
   `);
   const map: Record<string, number> = {};
-  for (const row of result.rows as any[]) {
-    map[row.key] = parseFloat(row.value) || 0;
+  for (const row of result.rows as { key: string; value: string }[]) {
+    const n = parseFloat(row.value);
+    if (Number.isFinite(n)) map[row.key] = n;
   }
-  return {
-    commissionRate: map["default_commission_rate"] ?? 15,
-    insuranceRate:  map["insurance_rate"]          ?? 1,
-    otherFeeRate:   map["other_fee_rate"]          ?? 0.5,
-    otherFeeFixed:  map["other_fee_fixed"]         ?? 0,
-  };
+  return map;
+}
+
+function pickConfiguredRate(
+  override: number | undefined,
+  map: Record<string, number>,
+  configKey: string,
+  missing: string[],
+): number | undefined {
+  if (override !== undefined) return override;
+  if (Object.prototype.hasOwnProperty.call(map, configKey)) return map[configKey];
+  missing.push(configKey);
+  return undefined;
+}
+
+/**
+ * Resolve settlement rates: request override > pricing_config row.
+ * Never invent business percentages (no silent 15 / 1 / 0.5).
+ */
+async function resolveSettlementRates(overrides: SettlementRateOverrides = {}): Promise<{
+  commissionRate: number;
+  insuranceRate: number;
+  otherFeeRate: number;
+  otherFeeFixed: number;
+}> {
+  const map = await loadSettlementRateMap();
+  const missing: string[] = [];
+  const commissionRate = pickConfiguredRate(
+    parseOptionalNumber(overrides.commission_rate), map, "default_commission_rate", missing,
+  );
+  const insuranceRate = pickConfiguredRate(
+    parseOptionalNumber(overrides.insurance_rate), map, "insurance_rate", missing,
+  );
+  const otherFeeRate = pickConfiguredRate(
+    parseOptionalNumber(overrides.other_fee_rate), map, "other_fee_rate", missing,
+  );
+  const otherFeeFixed = pickConfiguredRate(
+    parseOptionalNumber(overrides.other_fee_fixed), map, "other_fee_fixed", missing,
+  );
+  if (missing.length || commissionRate === undefined || insuranceRate === undefined
+      || otherFeeRate === undefined || otherFeeFixed === undefined) {
+    throw new PricingConfigMissingError(missing.length ? missing : [
+      "default_commission_rate", "insurance_rate", "other_fee_rate", "other_fee_fixed",
+    ]);
+  }
+  return { commissionRate, insuranceRate, otherFeeRate, otherFeeFixed };
+}
+
+// ─── 費率設定讀取（compat name; no silent fake defaults）────────────────────
+async function getRates() {
+  return resolveSettlementRates();
 }
 
 // ─── 1. GET /config ──────────────────────────────────────────────────────────
@@ -51,6 +113,14 @@ franchiseSettlementsRouter.get("/config", async (_req, res) => {
     const rates = await getRates();
     res.json(rates);
   } catch (e) {
+    if (e instanceof PricingConfigMissingError) {
+      return res.status(503).json({
+        error: e.message,
+        code: e.code,
+        missingKeys: e.missingKeys,
+        configured: false,
+      });
+    }
     res.status(500).json({ error: String(e) });
   }
 });
@@ -85,11 +155,13 @@ franchiseSettlementsRouter.put("/config", async (req, res) => {
 franchiseSettlementsRouter.get("/preview", async (req, res) => {
   try {
     const totalFreight   = parseFloat(req.query.total_freight   as string ?? "0");
-    const rates          = await getRates();
-    const commissionRate = parseFloat(req.query.commission_rate as string ?? String(rates.commissionRate));
-    const insuranceRate  = parseFloat(req.query.insurance_rate  as string ?? String(rates.insuranceRate));
-    const otherFeeRate   = parseFloat(req.query.other_fee_rate  as string ?? String(rates.otherFeeRate));
-    const otherFeeFixed  = parseFloat(req.query.other_fee_fixed as string ?? String(rates.otherFeeFixed));
+    const rates = await resolveSettlementRates({
+      commission_rate: req.query.commission_rate,
+      insurance_rate: req.query.insurance_rate,
+      other_fee_rate: req.query.other_fee_rate,
+      other_fee_fixed: req.query.other_fee_fixed,
+    });
+    const { commissionRate, insuranceRate, otherFeeRate, otherFeeFixed } = rates;
 
     if (isNaN(totalFreight) || totalFreight < 0) {
       return res.status(400).json({ error: "total_freight 必須 >= 0" });
@@ -98,6 +170,14 @@ franchiseSettlementsRouter.get("/preview", async (req, res) => {
     const result = calculateSettlement({ totalFreight, commissionRate, insuranceRate, otherFeeRate, otherFeeFixed });
     res.json({ ...result, rates: { commissionRate, insuranceRate, otherFeeRate, otherFeeFixed } });
   } catch (e) {
+    if (e instanceof PricingConfigMissingError) {
+      return res.status(503).json({
+        error: e.message,
+        code: e.code,
+        missingKeys: e.missingKeys,
+        configured: false,
+      });
+    }
     res.status(500).json({ error: String(e) });
   }
 });
@@ -123,11 +203,8 @@ franchiseSettlementsRouter.post("/calculate/:orderId", async (req, res) => {
     const order = orderRows.rows[0] as any;
 
     const totalFreight  = parseFloat(order.total_fee ?? "0");
-    const systemRates   = await getRates();
-    const commissionRate = req.body.commission_rate ?? systemRates.commissionRate;
-    const insuranceRate  = req.body.insurance_rate  ?? systemRates.insuranceRate;
-    const otherFeeRate   = req.body.other_fee_rate  ?? systemRates.otherFeeRate;
-    const otherFeeFixed  = req.body.other_fee_fixed ?? systemRates.otherFeeFixed;
+    const { commissionRate, insuranceRate, otherFeeRate, otherFeeFixed } =
+      await resolveSettlementRates(req.body ?? {});
 
     const result = calculateSettlement({ totalFreight, commissionRate, insuranceRate, otherFeeRate, otherFeeFixed });
 
@@ -178,6 +255,14 @@ franchiseSettlementsRouter.post("/calculate/:orderId", async (req, res) => {
       },
     });
   } catch (e) {
+    if (e instanceof PricingConfigMissingError) {
+      return res.status(503).json({
+        error: e.message,
+        code: e.code,
+        missingKeys: e.missingKeys,
+        configured: false,
+      });
+    }
     console.error("[franchise-settlements/calculate]", e);
     res.status(500).json({ error: String(e) });
   }
@@ -192,7 +277,7 @@ franchiseSettlementsRouter.post("/batch-calculate", async (req, res) => {
       to_date?: string;
     };
 
-    const rates = await getRates();
+    const rates = await resolveSettlementRates(req.body ?? {});
     let orderFilter: SQL;
 
     if (order_ids?.length) {
@@ -251,6 +336,14 @@ franchiseSettlementsRouter.post("/batch-calculate", async (req, res) => {
 
     res.json({ ok: true, processed: orders.rows.length, inserted, errors });
   } catch (e) {
+    if (e instanceof PricingConfigMissingError) {
+      return res.status(503).json({
+        error: e.message,
+        code: e.code,
+        missingKeys: e.missingKeys,
+        configured: false,
+      });
+    }
     res.status(500).json({ error: String(e) });
   }
 });
@@ -587,7 +680,7 @@ export async function autoCalculateSettlement(orderId: number): Promise<void> {
     const totalFreight = parseFloat(order.total_fee ?? "0");
     if (totalFreight <= 0) return;
 
-    const rates = await getRates();
+    const rates = await resolveSettlementRates();
     const result = calculateSettlement({ totalFreight, ...rates });
 
     await db.execute(sql`
@@ -642,6 +735,10 @@ export async function autoCalculateSettlement(orderId: number): Promise<void> {
       }
     });
   } catch (e) {
+    if (e instanceof PricingConfigMissingError) {
+      console.error("[autoCalculateSettlement] configuration missing:", e.missingKeys);
+      return;
+    }
     console.error("[autoCalculateSettlement] error:", e);
   }
 }
