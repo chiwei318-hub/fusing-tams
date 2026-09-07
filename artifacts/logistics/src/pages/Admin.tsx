@@ -41,6 +41,7 @@ const QuotationTab         = lazy(() => import("./admin/QuotationTab"));
 const QuotesTab            = lazy(() => import("./admin/QuotesTab"));
 const RoutePriceTab        = lazy(() => import("./admin/RoutePriceTab"));
 const VehicleCostTab       = lazy(() => import("./admin/VehicleCostTab"));
+const CommercialTripCostRatesTab = lazy(() => import("./admin/CommercialTripCostRatesTab"));
 const PermissionTab        = lazy(() => import("./admin/PermissionTab"));
 const AccountInviteTab     = lazy(() => import("./admin/AccountInviteTab"));
 const OAuthAccountsTab          = lazy(() => import("./admin/OAuthAccountsTab"));
@@ -1698,6 +1699,7 @@ export default function Admin() {
                   { value: "quotes",        icon: <span className="text-sm leading-none">📋</span>,               label: "報價管理" },
                   { value: "routeprice",    icon: <MapPin className="w-3.5 h-3.5 text-emerald-600" />,            label: "路線報價" },
                   { value: "vehiclecost",   icon: <span className="text-sm leading-none">💰</span>,               label: "車輛成本" },
+                  { value: "commercial-cost-rates", icon: <span className="text-sm leading-none">🧾</span>,        label: "商業成本費率" },
                   { value: "invoice",       icon: <DollarSign className="w-3.5 h-3.5 text-emerald-500" />,        label: "電子發票" },
                   { value: "settlement",    icon: <DollarSign className="w-3.5 h-3.5 text-emerald-600" />,        label: "結算" },
                   { value: "cashflow",      icon: <Layers className="w-3.5 h-3.5 text-indigo-500" />,             label: "金流拆解" },
@@ -1884,13 +1886,21 @@ export default function Admin() {
                       <td className="px-3 py-2.5 hidden md:table-cell">
                         <div className="text-xs text-foreground/80 truncate max-w-[110px]">{order.cargoDescription}</div>
                         {order.totalFee != null ? (
-                          <div className="text-xs font-bold text-emerald-600 mt-0.5">NT${order.totalFee.toLocaleString()}</div>
+                          <div className="text-xs font-bold text-emerald-600 mt-0.5">運費 NT${order.totalFee.toLocaleString()}</div>
                         ) : (
                           <button onClick={() => openQuoteDialog(order as Order)}
                             className="mt-0.5 text-[11px] text-orange-500 hover:text-orange-700 flex items-center gap-0.5 font-medium">
                             <Calculator className="w-3 h-3" /> 估價
                           </button>
                         )}
+                        <div
+                          className="text-[11px] mt-0.5 text-muted-foreground"
+                          data-testid={`order-cost-amount-${order.id}`}
+                        >
+                          {(order as { costAmount?: number | null }).costAmount != null
+                            ? `成本 NT$${Number((order as { costAmount?: number | null }).costAmount).toLocaleString()}`
+                            : "成本 ─（未匹配）"}
+                        </div>
                       </td>
                       <td className="px-3 py-2.5">
                         <OrderStatusBadge status={order.status} />
@@ -3859,6 +3869,13 @@ export default function Admin() {
         {/* ===== 車輛成本計算 TAB ===== */}
         <TabsContent value="vehiclecost" className="outline-none">
           <VehicleCostTab />
+        </TabsContent>
+
+        {/* ===== 商業趟次成本費率 TAB（#6/#7 NORMAL PATH intake）===== */}
+        <TabsContent value="commercial-cost-rates" className="outline-none">
+          <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">載入中…</div>}>
+            <CommercialTripCostRatesTab />
+          </Suspense>
         </TabsContent>
 
         {/* ===== 派單優化 TAB ===== */}
